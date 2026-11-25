@@ -3,6 +3,7 @@ import { db, type Book, type Bookmark, type Collection, type Note, type ReadingM
 import { hashFile, uid } from '../lib/hash';
 import { analyzePdf, closeDocument } from '../lib/pdf';
 import { colorForTitle, spineHeightForTitle } from '../lib/colors';
+import { titleKey } from '../lib/titles';
 
 export type Theme = 'night' | 'day' | 'sepia';
 
@@ -165,13 +166,33 @@ async function importOne(job: ImportJob, file: File, collectionId?: string) {
     setJob(job.id, { stage: 'reading' });
     const fileHash = await hashFile(file);
     const d = await db();
+    // 1. Same file already on this shelf?
     const existing = await d.getFromIndex('books', 'fileHash', fileHash);
     if (existing) {
       setJob(job.id, { stage: 'duplicate', message: `Already on your shelf as “${existing.title}”` });
       return;
     }
+    // 2. Same file already in the shared library?
+    const cloudMod = await import('../lib/cloud');
+    const remoteSame = await cloudMod.findRemoteDuplicate(fileHash);
+    if (remoteSame) {
+      setJob(job.id, { stage: 'duplicate', message: await duplicateInLibrary(remoteSame.id, remoteSame.title) });
+      return;
+    }
     setJob(job.id, { stage: 'checking' });
     const info = await analyzePdf(file);
+    // 3. Same book under another file name (title match, ignoring case and punctuation)?
+    const key = titleKey(info.title);
+    const twin = key ? state.books.find((b) => titleKey(b.title) === key) : undefined;
+    if (twin) {
+      setJob(job.id, { stage: 'duplicate', message: `“${twin.title}” is already on your shelf` });
+      return;
+    }
+    const remoteTwin = await cloudMod.findRemoteDuplicate(fileHash, info.title);
+    if (remoteTwin) {
+      setJob(job.id, { stage: 'duplicate', message: await duplicateInLibrary(remoteTwin.id, remoteTwin.title) });
+      return;
+    }
     setJob(job.id, { stage: 'saving' });
     const colId = collectionId || state.collections[state.collections.length - 1]?.id || state.collections[0].id;
     const maxOrder = Math.max(0, ...state.books.map((b) => b.orderIndex));
@@ -205,6 +226,44 @@ async function importOne(job: ImportJob, file: File, collectionId?: string) {
     const msg = /password/i.test(String(err)) ? 'This PDF is password protected' : 'Could not read this PDF';
     setJob(job.id, { stage: 'error', message: msg });
   }
+}
+
+/** The book is already shared. If it was hidden on this device, bring it back instead of adding a copy. */
+async function duplicateInLibrary(remoteId: string, title: string): Promise<string> {
+  const d = await db();
+  const hidden = ((await d.get('kv', 'hiddenRemote')) as string[] | undefined) ?? [];
+  if (hidden.includes(remoteId)) {
+    await d.put('kv', hidden.filter((h) => h !== remoteId), 'hiddenRemote');
+    void import('./sync').then((m) => m.requestSync(50));
+    return `“${title}” is already in the library — it's back on your shelf`;
+  }
+  return `“${title}” is already in the library`;
+}
+
+/**
+ * Replace a local duplicate with the library's copy: notes, bookmarks and reading position move over,
+ * then the duplicate is removed.
+ */
+export async function mergeBookInto(fromId: string, toId: string) {
+  const from = state.books.find((b) => b.id === fromId);
+  const to = state.books.find((b) => b.id === toId);
+  if (!from || !to || fromId === toId) return;
+  const d = await db();
+  const tx = d.transaction(['notes', 'bookmarks'], 'readwrite');
+  const notes = state.notes.map((n) => (n.bookId === fromId ? { ...n, bookId: toId } : n));
+  const bookmarks = state.bookmarks.map((m) => (m.bookId === fromId ? { ...m, bookId: toId } : m));
+  for (const n of notes) if (n.bookId === toId) tx.objectStore('notes').put(n);
+  for (const m of bookmarks) if (m.bookId === toId) tx.objectStore('bookmarks').put(m);
+  await tx.done;
+  set({ notes, bookmarks });
+  if (from.lastOpenedAt > to.lastOpenedAt) await updateBook(toId, { lastPage: from.lastPage, lastOpenedAt: from.lastOpenedAt });
+  await deleteBook(fromId); // its notes were already moved, so nothing is lost
+}
+
+/** Is another book already using this title (ignoring case, spaces and punctuation)? */
+export function titleTaken(title: string, exceptId?: string): Book | undefined {
+  const key = titleKey(title);
+  return key ? state.books.find((b) => b.id !== exceptId && titleKey(b.title) === key) : undefined;
 }
 
 export function dismissImport(id: string) {

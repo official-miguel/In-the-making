@@ -27,6 +27,8 @@ export interface Book {
   remotePath?: string;
   uploadedBy?: string | null;
   sizeBytes?: number;
+  /** Not uploaded: too large, or the library already has this book. Stays on this device only. */
+  shareBlocked?: boolean;
 }
 
 /** The PDF itself lives in its own store, so listing books never loads large files. */

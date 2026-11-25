@@ -1,4 +1,5 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
+import { titleKey } from './titles';
 
 /**
  * The shared library (Supabase). Everyone sees every book; signed-in users upload.
@@ -61,6 +62,13 @@ export async function uploadRemote(file: Blob, meta: UploadMeta): Promise<Remote
   const existing = await cloud.from(TABLE).select('*').eq('file_hash', meta.fileHash).maybeSingle();
   if (existing.data) return existing.data as RemoteBook;
 
+  // Same book as a different file: refuse before uploading anything.
+  const key = titleKey(meta.title);
+  if (key) {
+    const same = await cloud.from(TABLE).select('*').eq('title_key', key).maybeSingle();
+    if (same.data) throw new DuplicateBookError((same.data as RemoteBook).title);
+  }
+
   const path = `${userId}/${meta.fileHash}.pdf`;
   const up = await cloud.storage.from(BUCKET).upload(path, file, { contentType: 'application/pdf', upsert: false });
   if (up.error && !/exists|duplicate/i.test(up.error.message)) {
@@ -80,9 +88,38 @@ export async function uploadRemote(file: Blob, meta: UploadMeta): Promise<Remote
       await cloud.storage.from(BUCKET).remove([path]);
       return again.data as RemoteBook;
     }
+    // Someone added the same title at the same moment (unique title rule in the database).
+    if (ins.error.code === '23505') {
+      await cloud.storage.from(BUCKET).remove([path]);
+      const twin = key ? await cloud.from(TABLE).select('title').eq('title_key', key).maybeSingle() : null;
+      throw new DuplicateBookError((twin?.data as { title?: string } | null)?.title ?? meta.title);
+    }
     throw ins.error;
   }
   return ins.data as RemoteBook;
+}
+
+/** The book (same file or same title) is already in the shared library. */
+export class DuplicateBookError extends Error {
+  constructor(public existingTitle: string) {
+    super(`“${existingTitle}” is already in the library`);
+    this.name = 'DuplicateBookError';
+  }
+}
+
+/** Look for a book in the shared library by file hash or by title. Returns null when offline/not connected. */
+export async function findRemoteDuplicate(fileHash: string, title?: string): Promise<RemoteBook | null> {
+  if (!cloud || !navigator.onLine) return null;
+  try {
+    const byHash = await cloud.from(TABLE).select('*').eq('file_hash', fileHash).maybeSingle();
+    if (byHash.data) return byHash.data as RemoteBook;
+    const key = title ? titleKey(title) : '';
+    if (key) {
+      const byTitle = await cloud.from(TABLE).select('*').eq('title_key', key).maybeSingle();
+      if (byTitle.data) return byTitle.data as RemoteBook;
+    }
+  } catch { /* network trouble: the upload step checks again */ }
+  return null;
 }
 
 export async function downloadRemote(path: string): Promise<Blob> {

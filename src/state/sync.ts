@@ -1,8 +1,9 @@
 import type { Session as AuthSession } from '@supabase/supabase-js';
-import { cloud, downloadRemote, listRemote, onRemoteChange, uploadRemote, type RemoteBook } from '../lib/cloud';
+import { cloud, downloadRemote, DuplicateBookError, listRemote, onRemoteChange, uploadRemote, type RemoteBook } from '../lib/cloud';
+import { titleKey } from '../lib/titles';
 import { db, getPdfBlob, type Book } from '../lib/db';
 import { uid } from '../lib/hash';
-import { getState, init, patchState, sortBooks, toast, updateBook, type ImportJob } from './store';
+import { getState, init, mergeBookInto, patchState, sortBooks, toast, updateBook, type ImportJob } from './store';
 
 /**
  * Keeps this device's shelf in step with the shared library:
@@ -114,11 +115,18 @@ export async function syncNow() {
       for (const id of removed) map.delete(id);
       patchState({ books: sortBooks([...map.values()]) });
       if (added.length) toast(added.length === 1 ? `New in the library: “${added[0].title}”` : `${added.length} new books in the library`);
+
+      // A book only on this device that the library also has (same title): keep one copy, the library's.
+      for (const a of added) {
+        const key = titleKey(a.title);
+        const localTwin = key && getState().books.find((x) => x.id !== a.id && !x.remoteId && titleKey(x.title) === key);
+        if (localTwin) await mergeBookInto(localTwin.id, a.id);
+      }
     }
 
     // Share books that are only on this device.
     if (me) {
-      for (const b of getState().books.filter((x) => !x.remoteId && (x.cloud ?? 'local') === 'local')) {
+      for (const b of getState().books.filter((x) => !x.remoteId && !x.shareBlocked && (x.cloud ?? 'local') === 'local')) {
         if (!navigator.onLine) break;
         await shareBook(b);
       }
@@ -151,8 +159,23 @@ async function shareBook(b: Book) {
     await updateBook(b.id, { remoteId: r.id, remotePath: r.storage_path, uploadedBy: r.uploaded_by, cloud: 'synced' });
     setJob(id, { stage: 'done', message: 'Shared with everyone' });
   } catch (e) {
-    const msg = e instanceof Error ? e.message : 'Upload failed';
-    setJob(id, { stage: 'error', message: /large/i.test(msg) ? 'Too large to share — kept on this device' : 'Not shared yet — will retry' });
+    if (e instanceof DuplicateBookError) {
+      // Someone else already shared this book: use the library's copy and keep this reader's notes.
+      const key = titleKey(b.title);
+      const twin = getState().books.find((x) => x.id !== b.id && x.remoteId && titleKey(x.title) === key);
+      if (twin) {
+        await mergeBookInto(b.id, twin.id);
+        setJob(id, { stage: 'duplicate', message: `Already in the library — your notes moved to “${twin.title}”` });
+      } else {
+        await updateBook(b.id, { shareBlocked: true });
+        setJob(id, { stage: 'duplicate', message: e.message });
+      }
+    } else {
+      const msg = e instanceof Error ? e.message : 'Upload failed';
+      const tooBig = /large/i.test(msg);
+      if (tooBig) await updateBook(b.id, { shareBlocked: true });
+      setJob(id, { stage: 'error', message: tooBig ? 'Too large to share — kept on this device' : 'Not shared yet — will retry' });
+    }
   }
   clearJobSoon(id);
 }

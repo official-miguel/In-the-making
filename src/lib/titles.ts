@@ -28,6 +28,14 @@ export function isUsefulTitle(t: string | undefined | null): t is string {
   return !JUNK.some((re) => re.test(s));
 }
 
+/**
+ * Key used to spot the same book under different spellings: "Habits_of-Attention" = "Habits of Attention".
+ * Must match the database rule: lower(regexp_replace(title, '[^[:alnum:]]+', '', 'g')).
+ */
+export function titleKey(title: string): string {
+  return title.replace(/[^\p{L}\p{N}]+/gu, '').toLowerCase();
+}
+
 export function tidyTitle(t: string): string {
   let s = t.replace(/\s+/g, ' ').trim();
   s = s.replace(/^microsoft word - /i, '');

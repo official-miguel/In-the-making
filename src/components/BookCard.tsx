@@ -1,7 +1,7 @@
 import { useLayoutEffect, useRef, useState } from 'react';
 import type { Book } from '../lib/db';
 import { BOOK_COLORS } from '../lib/colors';
-import { canRemoveForEveryone, deleteBook, moveBook, updateBook, useStore } from '../state/store';
+import { canRemoveForEveryone, deleteBook, moveBook, titleTaken, toast, updateBook, useStore } from '../state/store';
 import { percentRead } from './BookSpine';
 import { IconChevronLeft, IconMore } from './Icons';
 
@@ -42,7 +42,14 @@ export function BookCard({ book, notesCount, onOpen, onClose, onPointerEnter, on
 
   const saveTitle = () => {
     const t = title.trim();
-    if (t && t !== book.title) void updateBook(book.id, { title: t });
+    if (!t || t === book.title) return;
+    const taken = titleTaken(t, book.id);
+    if (taken) {
+      toast(`“${taken.title}” is already on the shelf — pick another title`);
+      setTitle(book.title);
+      return;
+    }
+    void updateBook(book.id, { title: t });
   };
 
   return (
