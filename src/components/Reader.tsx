@@ -15,10 +15,10 @@ export const MIN_ZOOM = 1;
 const BOOK_STEPS = [1, 1.25, 1.5, 1.75, 2, 2.5, 3];
 const TEXT_STEPS = [1, 1.15, 1.3, 1.5, 1.75, 2];
 /** Text mode reflows, so it needs less magnification than a fixed PDF page. */
-function maxZoomFor(mode: 'book' | 'text') { return mode === 'text' ? 2 : 3; }
-function clampZoom(z: number, mode: 'book' | 'text') { return Math.min(maxZoomFor(mode), Math.max(MIN_ZOOM, z || 1)); }
-function stepZoom(z: number, dir: 1 | -1, mode: 'book' | 'text') {
-  const steps = mode === 'text' ? TEXT_STEPS : BOOK_STEPS;
+function clampZoom(z: number, max: number) { return Math.min(max, Math.max(MIN_ZOOM, z || 1)); }
+function stepZoom(z: number, dir: 1 | -1, mode: 'book' | 'text', max: number) {
+  const steps = [...(mode === 'text' ? TEXT_STEPS : BOOK_STEPS).filter((x) => x <= max + 0.001)];
+  if (steps[steps.length - 1] < max - 0.001) steps.push(max);
   if (dir > 0) return steps.find((x) => x > z + 0.01) ?? steps[steps.length - 1];
   return [...steps].reverse().find((x) => x < z - 0.01) ?? steps[0];
 }
@@ -78,10 +78,16 @@ export function Reader({ book, isPhone, initialPage, initialNoteId, onBack }: Pr
   const margin = isPhone ? 8 : 12;
 
   // ---------- zoom ----------
-  const zoom = clampZoom(settings.zoom ?? 1, mode);
-  const setZoom = useCallback((z: number) => void updateSettings({ zoom: clampZoom(Math.round(z * 100) / 100, mode) }), [mode]);
-  const zoomIn = useCallback(() => setZoom(stepZoom(zoom, 1, mode)), [zoom, setZoom, mode]);
-  const zoomOut = useCallback(() => setZoom(stepZoom(zoom, -1, mode)), [zoom, setZoom, mode]);
+  // On PC, book-mode zoom shows ONE page that fills the reading area's width (fit width) and scrolls down,
+  // so text never runs off the side. Zoom stops at the widest page that still fits.
+  const widthCap = Math.max(1, Math.floor(((geo.areaW - 64) / geo.pageW) * 20) / 20);
+  const zoomMax = geo.phone ? (mode === 'text' ? 2 : 3) : Math.min(mode === 'text' ? 2 : 3, widthCap);
+  const zoom = clampZoom(settings.zoom ?? 1, zoomMax);
+  // PC zoom (book and text mode): one wide page instead of the two-page spread.
+  const zoomView = !geo.phone && zoom > 1;
+  const setZoom = useCallback((z: number) => void updateSettings({ zoom: clampZoom(Math.round(z * 100) / 100, zoomMax) }), [zoomMax]);
+  const zoomIn = useCallback(() => setZoom(stepZoom(zoom, 1, mode, zoomMax)), [zoom, setZoom, mode, zoomMax]);
+  const zoomOut = useCallback(() => setZoom(stepZoom(zoom, -1, mode, zoomMax)), [zoom, setZoom, mode, zoomMax]);
   const zoomReset = useCallback(() => setZoom(1), [setZoom]);
   const stageRef = useRef<HTMLDivElement>(null);
   const spreadWrapRef = useRef<HTMLDivElement>(null);
@@ -96,12 +102,12 @@ export function Reader({ book, isPhone, initialPage, initialNoteId, onBack }: Pr
       e.preventDefault();
       acc += e.deltaY;
       if (Math.abs(acc) < 40) return;
-      setZoom(stepZoom(zoom, acc < 0 ? 1 : -1, mode));
+      setZoom(stepZoom(zoom, acc < 0 ? 1 : -1, mode, zoomMax));
       acc = 0;
     };
     el.addEventListener('wheel', onWheel, { passive: false });
     return () => el.removeEventListener('wheel', onWheel);
-  }, [zoom, setZoom, mode]);
+  }, [zoom, setZoom, mode, zoomMax]);
 
   // Two-finger pinch on touch screens: live preview with a CSS scale, then re-render sharp at the new zoom.
   useEffect(() => {
@@ -124,7 +130,7 @@ export function Reader({ book, isPhone, initialPage, initialNoteId, onBack }: Pr
       if (!pts.has(e.pointerId)) return;
       pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
       if (pts.size === 2 && startDist > 0) {
-        ratio = Math.max(MIN_ZOOM / zoom, Math.min(maxZoomFor(mode) / zoom, dist() / startDist));
+        ratio = Math.max(MIN_ZOOM / zoom, Math.min(zoomMax / zoom, dist() / startDist));
         preview(ratio);
       }
     };
@@ -146,7 +152,7 @@ export function Reader({ book, isPhone, initialPage, initialNoteId, onBack }: Pr
       window.removeEventListener('pointerup', up);
       window.removeEventListener('pointercancel', up);
     };
-  }, [zoom, setZoom, mode]);
+  }, [zoom, setZoom, zoomMax]);
 
   // ---------- load the PDF ----------
   useEffect(() => {
@@ -167,11 +173,15 @@ export function Reader({ book, isPhone, initialPage, initialNoteId, onBack }: Pr
 
   // ---------- pages ----------
   const spreadIdx = Math.floor(page / 2);
-  const pages = geo.phone ? [page] : [spreadIdx * 2, spreadIdx * 2 + 1];
+  const single = geo.phone || zoomView;
+  /** Size of one page frame: the normal book page, or one wide page in the PC zoom view. */
+  const frameW = zoomView ? Math.round(geo.pageW * zoom) : geo.pageW;
+  const frameH = geo.pageH;
+  const pages = single ? [page] : [spreadIdx * 2, spreadIdx * 2 + 1];
   const visible = pages.filter((p) => p >= 1 && p <= count);
   const focusPage = notePage && visible.includes(notePage) ? notePage : geo.phone ? page : (visible[visible.length - 1] ?? 1);
-  const canPrev = geo.phone ? page > 1 : spreadIdx > 0;
-  const canNext = geo.phone ? page < count : spreadIdx * 2 + 1 < count;
+  const canPrev = single ? page > 1 : spreadIdx > 0;
+  const canNext = single ? page < count : spreadIdx * 2 + 1 < count;
 
   const go = useCallback((p: number) => {
     setPage(Math.min(Math.max(1, p), count));
@@ -179,12 +189,12 @@ export function Reader({ book, isPhone, initialPage, initialNoteId, onBack }: Pr
   }, [count]);
   const next = useCallback(() => {
     if (!canNext) return;
-    if (geo.phone) go(page + 1);
+    if (single) go(page + 1);
     else go((spreadIdx + 1) * 2 + 1); // go() clamps to the last page
   }, [canNext, geo.phone, go, page, spreadIdx]);
   const prev = useCallback(() => {
     if (!canPrev) return;
-    if (geo.phone) go(page - 1);
+    if (single) go(page - 1);
     else go(Math.max(1, (spreadIdx - 1) * 2 + 1));
   }, [canPrev, geo.phone, go, page, spreadIdx]);
 
@@ -197,14 +207,15 @@ export function Reader({ book, isPhone, initialPage, initialNoteId, onBack }: Pr
   // Render the visible pages plus 2 ahead (and 1 behind) into the cache.
   useEffect(() => {
     if (!doc || mode !== 'book') return;
-    const ahead = geo.phone ? [page + 1, page + 2, page - 1] : [pages[1] + 1, pages[1] + 2, pages[0] - 1];
+    const ahead = single ? [page + 1, page + 2, page - 1] : [pages[1] + 1, pages[1] + 2, pages[0] - 1];
     const t = setTimeout(() => {
-      const W = Math.round(geo.pageW * zoom), H = Math.round(geo.pageH * zoom), M = Math.round(margin * zoom);
-      for (const p of ahead) if (p >= 1 && p <= count) renderPage(book.id, doc, p, W, H, M).catch(() => {});
+      const W = zoomView ? frameW : Math.round(geo.pageW * zoom), H = zoomView ? frameH : Math.round(geo.pageH * zoom);
+      const M = zoomView ? margin : Math.round(margin * zoom);
+      for (const p of ahead) if (p >= 1 && p <= count) renderPage(book.id, doc, p, W, H, M, zoomView).catch(() => {});
     }, 160);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [doc, page, mode, geo.pageW, geo.pageH, geo.phone, zoom]);
+  }, [doc, page, mode, geo.pageW, geo.pageH, geo.phone, zoom, zoomView]);
 
   // ---------- keyboard ----------
   useEffect(() => {
@@ -280,7 +291,8 @@ export function Reader({ book, isPhone, initialPage, initialNoteId, onBack }: Pr
   const pct = count > 1 ? ((page - 1) / (count - 1)) * 100 : 100;
 
   const renderOne = (n: number, side: 'left' | 'right' | 'single') => (
-    <Page key={n} book={book} doc={doc} pageNum={n} w={geo.pageW} h={geo.pageH} mode={mode} margin={margin} zoom={zoom}
+    <Page key={n} book={book} doc={doc} pageNum={n} w={frameW} h={frameH} mode={mode} margin={margin}
+      zoom={mode === 'text' ? zoom : zoomView ? 1 : zoom} fitWidth={zoomView && mode === 'book'}
       notes={notes.filter((x) => x.page === n)} flashId={flashId} side={side}
       onMarker={(note) => { selectNote(note); if (isPhone) setSheetOpen(true); }}
       onSwitchToBook={() => setMode('book')} />
@@ -295,7 +307,7 @@ export function Reader({ book, isPhone, initialPage, initialNoteId, onBack }: Pr
         aria-label={`Zoom ${Math.round(zoom * 100)} percent. Reset to 100 percent`}>
         {Math.round(zoom * 100)}%
       </button>
-      <button type="button" className="icon-btn" aria-label="Zoom in" title="Zoom in (+)" disabled={zoom >= maxZoomFor(mode)} onClick={zoomIn}>
+      <button type="button" className="icon-btn" aria-label="Zoom in" title="Zoom in (+)" disabled={zoom >= zoomMax - 0.001} onClick={zoomIn}>
         <IconPlus size={18} />
       </button>
     </div>
@@ -357,7 +369,7 @@ export function Reader({ book, isPhone, initialPage, initialNoteId, onBack }: Pr
 
       <div className="reader-body">
         <div className="reader-stage" ref={stageRef} style={geo.phone ? undefined : { width: geo.areaW }}>
-          <div style={geo.phone ? { position: 'absolute', left: 0, top: 0 } : { position: 'absolute', left: geo.x, top: geo.y - 64 }}>
+          <div style={geo.phone ? { position: 'absolute', left: 0, top: 0 } : { position: 'absolute', left: zoomView ? Math.round((geo.areaW - frameW) / 2) : geo.x, top: geo.y - 64 }}>
             {loadError ? (
               <div className="page load-error" style={{ width: geo.pageW * (geo.phone ? 1 : 2), height: geo.pageH }}>
                 <p>{loadError}</p>
@@ -365,13 +377,13 @@ export function Reader({ book, isPhone, initialPage, initialNoteId, onBack }: Pr
               </div>
             ) : (
               <div ref={spreadWrapRef} className="pinch-wrap">
-              <Spread pages={pages} swipe={zoom <= 1 || mode === 'text'} pageW={geo.pageW} pageH={geo.pageH} renderPage={renderOne}
+              <Spread pages={pages} swipe={zoom <= 1 || mode === 'text'} pageW={frameW} pageH={frameH} renderPage={renderOne}
                 animate={settings.pageAnimation} reduced={reduced}
                 canPrev={canPrev} canNext={canNext} onPrev={prev} onNext={next} />
               </div>
             )}
             {!geo.phone && (
-              <div className="reader-controls" style={{ width: geo.pageW * 2 }}>
+              <div className="reader-controls" style={{ width: Math.max(frameW, zoomView ? 560 : 0) * (zoomView ? 1 : 2) }}>
                 <button type="button" className="icon-btn outline" aria-label="Previous page" disabled={!canPrev} onClick={prev}><IconChevronLeft /></button>
                 {slider}
                 <span className="page-label" aria-live="polite">{pageLabel}</span>

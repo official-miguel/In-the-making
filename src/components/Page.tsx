@@ -17,9 +17,39 @@ export interface PageProps {
   margin: number;
   /** 1 = fit the page; >1 = magnified (book mode scrolls, text mode gets bigger letters). */
   zoom: number;
+  /** Fill the page width and scroll down (PC zoom view): text never runs off the side. */
+  fitWidth?: boolean;
   onMarker?: (note: Note) => void;
   onSwitchToBook?: () => void;
   side?: 'left' | 'right' | 'single';
+}
+
+/** True while a scrollable page has more content below what is visible. */
+function useMoreBelow(ref: React.RefObject<HTMLElement>, deps: unknown[]) {
+  const [more, setMore] = useState(false);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const check = () => setMore(el.scrollHeight - el.scrollTop - el.clientHeight > 6);
+    check();
+    el.addEventListener('scroll', check, { passive: true });
+    const ro = new ResizeObserver(check);
+    ro.observe(el);
+    if (el.firstElementChild) ro.observe(el.firstElementChild);
+    return () => { el.removeEventListener('scroll', check); ro.disconnect(); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, deps);
+  return more;
+}
+
+function MoreBelow({ show, target }: { show: boolean; target: React.RefObject<HTMLElement> }) {
+  if (!show) return null;
+  return (
+    <button type="button" className="more-below" aria-label="Scroll down to read more of this page"
+      onClick={() => target.current?.scrollBy({ top: target.current.clientHeight * 0.8, behavior: 'smooth' })}>
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6" /></svg>
+    </button>
+  );
 }
 
 /** One paper page. PDF pages are contain-fitted onto it, so any PDF size looks like a book page. */
@@ -53,14 +83,14 @@ function EndPaper() {
   return <div className="end-paper"><span>The end</span></div>;
 }
 
-function PdfCanvasPage({ book, doc, pageNum, w: frameW, h: frameH, notes, flashId, margin: frameMargin, zoom, onMarker }: PageProps) {
+function PdfCanvasPage({ book, doc, pageNum, w: frameW, h: frameH, notes, flashId, margin: frameMargin, zoom, fitWidth = false, onMarker }: PageProps) {
   // Zoom renders the page larger (sharp, not stretched) inside the same page frame, which then scrolls.
   const w = Math.round(frameW * zoom), h = Math.round(frameH * zoom), margin = Math.round(frameMargin * zoom);
   const scrollRef = useRef<HTMLDivElement>(null);
   const prevZoom = useRef(zoom);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const textRef = useRef<HTMLDivElement>(null);
-  const [fit, setFit] = useState<Fit | null>(() => peekRendered(book.id, pageNum, w, h, margin)?.fit ?? null);
+  const [fit, setFit] = useState<Fit | null>(() => peekRendered(book.id, pageNum, w, h, margin, fitWidth)?.fit ?? null);
   const [failed, setFailed] = useState(false);
 
   const draw = (r: Rendered) => {
@@ -73,12 +103,12 @@ function PdfCanvasPage({ book, doc, pageNum, w: frameW, h: frameH, notes, flashI
 
   // Draw synchronously if this page is already in the cache (no flash during page turns).
   useLayoutEffect(() => {
-    const hit = peekRendered(book.id, pageNum, w, h, margin);
+    const hit = peekRendered(book.id, pageNum, w, h, margin, fitWidth);
     if (hit) {
       setFit(hit.fit);
       draw(hit);
     }
-  }, [book.id, pageNum, w, h, margin]);
+  }, [book.id, pageNum, w, h, margin, fitWidth]);
 
   useEffect(() => {
     if (!doc) return;
@@ -86,9 +116,9 @@ function PdfCanvasPage({ book, doc, pageNum, w: frameW, h: frameH, notes, flashI
     let cleanup = () => {};
     setFailed(false);
     // Pages flicked past (slider drags) are never rendered: wait a moment unless already cached.
-    const cached = !!peekRendered(book.id, pageNum, w, h, margin);
+    const cached = !!peekRendered(book.id, pageNum, w, h, margin, fitWidth);
     const wait = cached ? Promise.resolve() : new Promise((r) => setTimeout(r, 70));
-    wait.then(() => (alive ? renderPage(book.id, doc, pageNum, w, h, margin) : Promise.reject(new Error('skipped'))))
+    wait.then(() => (alive ? renderPage(book.id, doc, pageNum, w, h, margin, fitWidth) : Promise.reject(new Error('skipped'))))
       .then((r) => {
         if (!alive) return;
         setFit(r.fit);
@@ -106,7 +136,7 @@ function PdfCanvasPage({ book, doc, pageNum, w: frameW, h: frameH, notes, flashI
       .catch((e) => { if (alive) { console.error(e); setFailed(true); } });
     // (a rejected "skipped" wait only happens after unmount, when alive is false)
     return () => { alive = false; cleanup(); };
-  }, [doc, book.id, pageNum, w, h, margin]);
+  }, [doc, book.id, pageNum, w, h, margin, fitWidth]);
 
   // Keep the same spot in the middle of the view when zooming in or out.
   useLayoutEffect(() => {
@@ -120,11 +150,14 @@ function PdfCanvasPage({ book, doc, pageNum, w: frameW, h: frameH, notes, flashI
     el.scrollTop = cy * k - el.clientHeight / 2;
   }, [zoom]);
 
+  const moreBelow = useMoreBelow(scrollRef, [fit?.h, zoom, fitWidth]);
   const marked = notes.filter((n) => n.rects?.length);
   return (
-    <div ref={scrollRef} className={'page-scroll' + (zoom > 1 ? ' zoomed' : '')} tabIndex={zoom > 1 ? 0 : undefined}
-      aria-label={zoom > 1 ? `Page ${pageNum}, zoomed ${Math.round(zoom * 100)}%. Scroll to move around.` : undefined}>
-    <div className="page-zoom" style={{ width: w, height: h }}>
+    <>
+    <div ref={scrollRef} className={'page-scroll' + (zoom > 1 || fitWidth ? ' zoomed' : '') + (fitWidth ? ' fit-width' : '')}
+      tabIndex={zoom > 1 || fitWidth ? 0 : undefined}
+      aria-label={zoom > 1 || fitWidth ? `Page ${pageNum}. Scroll to read the whole page.` : undefined}>
+    <div className="page-zoom" style={{ width: w, height: fitWidth && fit ? Math.max(h, fit.h + margin * 2) : h }}>
       {!fit && !failed && <div className="page-loading" aria-hidden="true"><span /></div>}
       {failed && <div className="page-error">This page could not be drawn.</div>}
       <div className="fitbox" style={fit ? { left: fit.x, top: fit.y, width: fit.w, height: fit.h } : { display: 'none' }}>
@@ -147,11 +180,15 @@ function PdfCanvasPage({ book, doc, pageNum, w: frameW, h: frameH, notes, flashI
       </div>
     </div>
     </div>
+    <MoreBelow show={moreBelow} target={scrollRef} />
+    </>
   );
 }
 
 function TextPage({ book, doc, pageNum, notes, flashId, zoom, onSwitchToBook }: PageProps) {
   const [paras, setParas] = useState<string[] | null>(null);
+  const textRef = useRef<HTMLDivElement>(null);
+  const moreBelow = useMoreBelow(textRef, [paras, zoom]);
   useEffect(() => {
     if (!doc) return;
     let alive = true;
@@ -174,9 +211,12 @@ function TextPage({ book, doc, pageNum, notes, flashId, zoom, onSwitchToBook }: 
   }
   const quoted = notes.filter((n) => n.quote && n.quote.length > 2);
   return (
-    <div className="text-page" tabIndex={0} aria-label={`Page ${pageNum} text`} style={{ ['--text-zoom' as string]: zoom }}>
+    <>
+    <div ref={textRef} className="text-page" tabIndex={0} aria-label={`Page ${pageNum} text`} style={{ ['--text-zoom' as string]: zoom }}>
       {paras.map((p, i) => <p key={i}>{markQuotes(p, quoted, flashId)}</p>)}
     </div>
+    <MoreBelow show={moreBelow} target={textRef} />
+    </>
   );
 }
 

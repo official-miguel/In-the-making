@@ -140,23 +140,24 @@ function renderDensity() {
   return Math.min(Math.max(window.devicePixelRatio || 1, 2), 3);
 }
 
-function renderKey(bookId: string, pageNum: number, frameW: number, frameH: number, margin: number) {
-  return `${bookId}:${pageNum}:${Math.round(frameW)}x${Math.round(frameH)}:${Math.round(margin)}@${renderDensity()}`;
+function renderKey(bookId: string, pageNum: number, frameW: number, frameH: number, margin: number, fitWidth = false) {
+  return `${bookId}:${pageNum}:${Math.round(frameW)}x${fitWidth ? 'fw' : Math.round(frameH)}:${Math.round(margin)}@${renderDensity()}`;
 }
 
 /** A page that is already rendered, so it can be drawn before the next paint (no blank flash). */
-export function peekRendered(bookId: string, pageNum: number, frameW: number, frameH: number, margin: number) {
-  return resolved.get(renderKey(bookId, pageNum, frameW, frameH, margin));
+export function peekRendered(bookId: string, pageNum: number, frameW: number, frameH: number, margin: number, fitWidth = false) {
+  return resolved.get(renderKey(bookId, pageNum, frameW, frameH, margin, fitWidth));
 }
 
 /**
  * Contain-fit a page of size (pw, ph) into a frame, leaving a small paper margin.
  * Position and size are whole CSS pixels: a canvas placed at a fractional pixel is resampled and looks blurry.
  */
-export function fitPage(pw: number, ph: number, frameW: number, frameH: number, margin: number): Fit {
-  const scale = Math.min((frameW - margin * 2) / pw, (frameH - margin * 2) / ph);
+export function fitPage(pw: number, ph: number, frameW: number, frameH: number, margin: number, fitWidth = false): Fit {
+  // fitWidth: the page always fills the frame's width (lines never leave the page); the height scrolls.
+  const scale = fitWidth ? (frameW - margin * 2) / pw : Math.min((frameW - margin * 2) / pw, (frameH - margin * 2) / ph);
   const w = Math.max(1, Math.round(pw * scale)), h = Math.max(1, Math.round(ph * scale));
-  return { x: Math.round((frameW - w) / 2), y: Math.round((frameH - h) / 2), w, h, scale };
+  return { x: Math.round((frameW - w) / 2), y: fitWidth ? margin : Math.round((frameH - h) / 2), w, h, scale };
 }
 
 function evict() {
@@ -172,9 +173,9 @@ function evict() {
 }
 
 export function renderPage(
-  bookId: string, doc: PDFDocumentProxy, pageNum: number, frameW: number, frameH: number, margin: number,
+  bookId: string, doc: PDFDocumentProxy, pageNum: number, frameW: number, frameH: number, margin: number, fitWidth = false,
 ): Promise<Rendered> {
-  const key = renderKey(bookId, pageNum, frameW, frameH, margin);
+  const key = renderKey(bookId, pageNum, frameW, frameH, margin, fitWidth);
   const hit = renderCache.get(key);
   if (hit) {
     renderCache.delete(key);
@@ -184,7 +185,7 @@ export function renderPage(
   const p = (async () => {
     const page = await doc.getPage(pageNum);
     const base = page.getViewport({ scale: 1 });
-    const fit = fitPage(base.width, base.height, frameW, frameH, margin);
+    const fit = fitPage(base.width, base.height, frameW, frameH, margin, fitWidth);
     // Canvas pixels map exactly onto the fitted CSS box (w x h) at the render density.
     let density = renderDensity();
     if (fit.w * fit.h * density * density > MAX_CANVAS_PIXELS) density = Math.sqrt(MAX_CANVAS_PIXELS / (fit.w * fit.h));

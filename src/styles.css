@@ -613,3 +613,23 @@ textarea.input { resize: vertical; }
 .drop-hint.arrange-empty { pointer-events: none; }
 .sync-problem { color: #FDA4AF; }
 :root[data-theme="day"] .sync-problem, :root[data-theme="sepia"] .sync-problem { color: #BE123C; }
+
+/* Fit-width zoom: one wide page that scrolls down; never sideways. */
+.page-scroll.fit-width { overflow-x: hidden; overflow-y: auto; cursor: auto; scrollbar-width: none; }
+/* No scrollbar on fit-width pages: it would eat into the page width and clip line ends. */
+.page-scroll.fit-width::-webkit-scrollbar { width: 0; height: 0; }
+/* "More below" cue: a soft fade and a round arrow at the bottom of a page that scrolls. */
+.more-below {
+  position: absolute; left: 50%; bottom: 10px; transform: translateX(-50%); z-index: 6;
+  width: 36px; height: 36px; border-radius: 50%; border: 0; padding: 0;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--accent); color: #0F172A; box-shadow: 0 4px 14px rgba(15, 23, 42, .3);
+  animation: nudge-down 1.8s ease-in-out infinite;
+}
+.page:has(.more-below)::after {
+  content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 56px; z-index: 5; pointer-events: none;
+  background: linear-gradient(to bottom, transparent, var(--paper));
+}
+@keyframes nudge-down { 0%, 100% { transform: translateX(-50%); } 50% { transform: translateX(-50%) translateY(3px); } }
+.reader.phone .more-below { bottom: 46px; }
+.reader.phone .page:has(.more-below)::after { bottom: 20px; }
