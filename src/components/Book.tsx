@@ -65,6 +65,7 @@ interface Props {
   isPhone: boolean;
   paper: string;
   thumbUrl: string | null;
+  sheetHidden?: boolean;
   /** Open: the reader can start fading in. Close: the reader can be removed. */
   onMid: () => void;
   onDone: () => void;
@@ -75,9 +76,9 @@ interface Props {
  * spine slides out → turns to face you while growing to the centre → cover swings open on its hinge.
  * Only transform and opacity are animated.
  */
-export function BookOpener({ book, mode, spineRect, paper, thumbUrl, onMid, onDone }: Props) {
+export function BookOpener({ book, mode, spineRect, paper, thumbUrl, sheetHidden, onMid, onDone }: Props) {
   const vp = viewportSize();
-  const T: Rect = closedBookRect(vp.w, vp.h);
+  const T: Rect = closedBookRect(vp.w, vp.h, { sheetHidden });
   const W = T.w, H = T.h;
   const shelf = spineSize(book, vp.w <= 899 ? PHONE_SPINE_SCALE : 1);
   const sRect = spineRect ?? new DOMRect(T.x, T.y + H / 2 - shelf.h / 2, shelf.w, shelf.h);

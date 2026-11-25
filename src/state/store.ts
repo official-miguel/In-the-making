@@ -17,6 +17,8 @@ export interface Settings {
   keepOffline: boolean;
   /** Reader zoom: page magnification in book mode, text size in text mode (1 = 100%). */
   zoom: number;
+  /** Phone reader: the notes panel at the bottom is hidden (page fills the screen). */
+  notesPanelHidden: boolean;
 }
 
 export interface Session { userId: string; email: string }
@@ -49,6 +51,7 @@ const DEFAULT_SETTINGS: Settings = {
   coverFromFirstPage: false,
   keepOffline: false,
   zoom: 1,
+  notesPanelHidden: false,
 };
 
 let state: State = {

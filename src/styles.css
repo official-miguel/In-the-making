@@ -633,3 +633,31 @@ textarea.input { resize: vertical; }
 @keyframes nudge-down { 0%, 100% { transform: translateX(-50%); } 50% { transform: translateX(-50%) translateY(3px); } }
 .reader.phone .more-below { bottom: 46px; }
 .reader.phone .page:has(.more-below)::after { bottom: 20px; }
+
+/* ===== Phone: hide / bring back the notes panel ===== */
+.sheet-top { position: relative; display: flex; justify-content: center; margin: 0 -20px -8px; }
+.sheet-top .sheet-handle { margin: 0; width: 120px; height: 32px; touch-action: none; }
+.sheet-hide { position: absolute; right: 12px; top: 2px; color: var(--muted); }
+.sheet .sheet-hide { color: #A3B1C6; }
+.panel-reveal { position: absolute; right: 16px; bottom: calc(18px + env(safe-area-inset-bottom)); z-index: 25; display: flex; align-items: center; gap: 10px; }
+.panel-reveal-page {
+  font-size: 12.5px; font-weight: 600; color: #F1F5F9; background: rgba(15, 23, 42, .82);
+  padding: 6px 10px; border-radius: 999px; font-variant-numeric: tabular-nums; backdrop-filter: blur(6px);
+}
+.panel-reveal-btn {
+  position: relative; width: 56px; height: 56px; border-radius: 50%; border: 0;
+  background: var(--accent); color: var(--on-accent); display: flex; align-items: center; justify-content: center;
+  box-shadow: 0 10px 24px rgba(2, 6, 23, .45); animation: card-in-up .2s var(--ease);
+}
+.panel-reveal-badge {
+  position: absolute; top: -2px; right: -2px; min-width: 20px; height: 20px; padding: 0 5px; border-radius: 999px;
+  background: #0F172A; color: #F1F5F9; font-size: 11px; font-weight: 700; display: flex; align-items: center; justify-content: center;
+  border: 2px solid var(--accent);
+}
+/* An upward swipe from the bottom edge also brings the panel back. */
+.panel-swipe-zone { position: absolute; left: 0; right: 90px; bottom: 0; height: 28px; z-index: 24; touch-action: none; }
+.panel-reveal-progress { position: absolute; left: 0; right: 0; bottom: 0; height: 3px; z-index: 23; background: rgba(15, 23, 42, .12); pointer-events: none; }
+.panel-reveal-progress > span { display: block; height: 100%; background: var(--accent); transform-origin: left; }
+.reader.phone.panel-hidden .more-below { bottom: 18px; left: 40%; }
+.reader.phone.panel-hidden .page:has(.more-below)::after { bottom: 0; }
+.reader.phone.panel-hidden .text-page { padding-bottom: 96px; }

@@ -30,9 +30,14 @@ export interface SpreadGeometry {
   areaW: number;
 }
 
-export function spreadGeometry(vw: number, vh: number): SpreadGeometry {
+export interface GeometryOptions {
+  /** Phone: the notes panel at the bottom is hidden, so the page fills the screen. */
+  sheetHidden?: boolean;
+}
+
+export function spreadGeometry(vw: number, vh: number, opts: GeometryOptions = {}): SpreadGeometry {
   if (vw <= PHONE_MAX) {
-    const pageH = vh - PHONE_TOPBAR - PHONE_SHEET + 20;
+    const pageH = opts.sheetHidden ? vh - PHONE_TOPBAR : vh - PHONE_TOPBAR - PHONE_SHEET + 20;
     return { phone: true, pageW: vw, pageH, x: 0, y: PHONE_TOPBAR, areaW: vw };
   }
   const areaW = vw - notesPanelWidth(vw);
@@ -54,8 +59,8 @@ export function spreadGeometry(vw: number, vh: number): SpreadGeometry {
 }
 
 /** Where the closed book sits before its cover swings open (the right-hand page; the whole page on phones). */
-export function closedBookRect(vw: number, vh: number): Rect {
-  const g = spreadGeometry(vw, vh);
+export function closedBookRect(vw: number, vh: number, opts: GeometryOptions = {}): Rect {
+  const g = spreadGeometry(vw, vh, opts);
   if (g.phone) return { x: 0, y: g.y, w: g.pageW, h: g.pageH };
   return { x: g.x + g.pageW, y: g.y, w: g.pageW, h: g.pageH };
 }

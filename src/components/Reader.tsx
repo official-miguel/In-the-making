@@ -9,7 +9,7 @@ import { Page } from './Page';
 import { Spread } from './Spread';
 import { SelectionToolbar, type SelectionInfo } from './SelectionToolbar';
 import { NoteCard, NoteComposer, NotesPanel, NotesTabs, ExportPanel, noteCounts, sortNotes, type NotesTab } from './NotesPanel';
-import { IconBook, IconBookmark, IconMinus, IconPlus, IconChevronLeft, IconChevronRight, IconSearch, IconText, IconX } from './Icons';
+import { IconBook, IconBookmark, IconChevronDown, IconMinus, IconNote, IconPlus, IconChevronLeft, IconChevronRight, IconSearch, IconText, IconX } from './Icons';
 
 export const MIN_ZOOM = 1;
 const BOOK_STEPS = [1, 1.25, 1.5, 1.75, 2, 2.5, 3];
@@ -58,7 +58,8 @@ export function Reader({ book, isPhone, initialPage, initialNoteId, onBack }: Pr
   const bookmarks = useStore((s) => s.bookmarks);
   const notes = useMemo(() => allNotes.filter((n) => n.bookId === book.id), [allNotes, book.id]);
   const vp = useViewport();
-  const geo = spreadGeometry(vp.w, vp.h);
+  const panelHidden = !!settings.notesPanelHidden;
+  const geo = spreadGeometry(vp.w, vp.h, { sheetHidden: panelHidden });
   const reduced = useReducedMotion();
 
   const [doc, setDoc] = useState<PDFDocumentProxy | null>(null);
@@ -71,6 +72,11 @@ export function Reader({ book, isPhone, initialPage, initialNoteId, onBack }: Pr
   const [attach, setAttach] = useState<{ id: string; quote: string } | null>(null);
   const [searchOpen, setSearchOpen] = useState(false);
   const [sheetOpen, setSheetOpen] = useState(false);
+  /** Phone: hide the notes panel (page fills the screen) or bring it back. Remembered between books. */
+  const setPanelHidden = useCallback((hidden: boolean) => {
+    if (hidden) setSheetOpen(false);
+    void updateSettings({ notesPanelHidden: hidden });
+  }, []);
   const [sheetColor, setSheetColor] = useState<string>(HIGHLIGHT_COLORS[0]);
   const [rootEl, setRootEl] = useState<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -265,8 +271,8 @@ export function Reader({ book, isPhone, initialPage, initialNoteId, onBack }: Pr
     setActiveNoteId(n.id);
     setNotePage(info.page);
     setAttach({ id: n.id, quote: info.quote });
-    if (isPhone) setSheetOpen(false);
-    setTimeout(() => inputRef.current?.focus(), 50);
+    if (isPhone) { setSheetOpen(false); setPanelHidden(false); } // the note box must be visible
+    setTimeout(() => inputRef.current?.focus(), 120);
   };
   const onSubmitNote = async (text: string) => {
     if (attach) {
@@ -294,7 +300,7 @@ export function Reader({ book, isPhone, initialPage, initialNoteId, onBack }: Pr
     <Page key={n} book={book} doc={doc} pageNum={n} w={frameW} h={frameH} mode={mode} margin={margin}
       zoom={mode === 'text' ? zoom : zoomView ? 1 : zoom} fitWidth={zoomView && mode === 'book'}
       notes={notes.filter((x) => x.page === n)} flashId={flashId} side={side}
-      onMarker={(note) => { selectNote(note); if (isPhone) setSheetOpen(true); }}
+      onMarker={(note) => { selectNote(note); if (isPhone) { setPanelHidden(false); setSheetOpen(true); } }}
       onSwitchToBook={() => setMode('book')} />
   );
 
@@ -336,7 +342,7 @@ export function Reader({ book, isPhone, initialPage, initialNoteId, onBack }: Pr
   );
 
   return (
-    <div className={`reader paper-${settings.paperTheme}` + (geo.phone ? ' phone' : '')} ref={setRootEl}>
+    <div className={`reader paper-${settings.paperTheme}` + (geo.phone ? ' phone' : '') + (geo.phone && panelHidden ? ' panel-hidden' : '')} ref={setRootEl}>
       {geo.phone ? (
         <header className="reader-topbar phone">
           <button type="button" className="icon-btn" aria-label="Back to shelf" onClick={onBack}><IconChevronLeft size={22} /></button>
@@ -399,8 +405,13 @@ export function Reader({ book, isPhone, initialPage, initialNoteId, onBack }: Pr
         )}
       </div>
 
-      {geo.phone && (
-        <PhoneSheet
+      {geo.phone && panelHidden && (
+        <PanelReveal page={page} count={count} pageNotes={notes.filter((n) => n.page === page).length}
+          onShow={() => setPanelHidden(false)} />
+      )}
+
+      {geo.phone && !panelHidden && (
+        <PhoneSheet onHide={() => setPanelHidden(true)}
           open={sheetOpen} setOpen={setSheetOpen} book={book} notes={notes} page={page} count={count}
           activeNoteId={activeNoteId} onSelect={selectNote} color={sheetColor} setColor={setSheetColor}
           attachQuote={attach?.quote} onSubmit={onSubmitNote} onCancelAttach={() => setAttach(null)} inputRef={inputRef}
@@ -416,7 +427,29 @@ export function Reader({ book, isPhone, initialPage, initialNoteId, onBack }: Pr
   );
 }
 
+/** Shown when the notes panel is hidden: a round button (and an upward swipe at the bottom edge) brings it back. */
+function PanelReveal({ page, count, pageNotes, onShow }: { page: number; count: number; pageNotes: number; onShow: () => void }) {
+  const startY = useRef<number | null>(null);
+  return (
+    <>
+      <div className="panel-swipe-zone" aria-hidden="true"
+        onPointerDown={(e) => { startY.current = e.clientY; }}
+        onPointerUp={(e) => { if (startY.current !== null && startY.current - e.clientY > 30) onShow(); startY.current = null; }} />
+      <div className="panel-reveal">
+        <span className="panel-reveal-page" aria-hidden="true">p. {page} / {count}</span>
+        <button type="button" className="panel-reveal-btn" onClick={onShow}
+          aria-label={`Show notes and page controls${pageNotes ? ` (${pageNotes} on this page)` : ''}`}>
+          <IconNote size={22} />
+          {pageNotes > 0 && <span className="panel-reveal-badge">{pageNotes}</span>}
+        </button>
+      </div>
+      <div className="panel-reveal-progress" aria-hidden="true"><span style={{ transform: `scaleX(${count > 1 ? (page - 1) / (count - 1) : 1})` }} /></div>
+    </>
+  );
+}
+
 function PhoneSheet(props: {
+  onHide: () => void;
   open: boolean; setOpen: (o: boolean) => void; book: Book; notes: Note[]; page: number; count: number;
   activeNoteId: string | null; onSelect: (n: Note) => void; color: string; setColor: (c: string) => void;
   attachQuote?: string; onSubmit: (t: string) => void; onCancelAttach: () => void; inputRef: React.RefObject<HTMLInputElement>;
@@ -426,12 +459,30 @@ function PhoneSheet(props: {
   const [tab, setTab] = useState<NotesTab>('page');
   const counts = noteCounts(notes);
   const list = sortNotes(tab === 'page' ? notes.filter((n) => n.page === page) : notes);
+  // Swipe the handle: up = more notes, down = smaller, then hidden. A tap toggles the notes list.
+  const swipe = useRef<{ y: number; moved: boolean } | null>(null);
+  const onHandleDown = (e: React.PointerEvent) => { swipe.current = { y: e.clientY, moved: false }; };
+  const onHandleUp = (e: React.PointerEvent) => {
+    const s = swipe.current;
+    if (!s) return;
+    const dy = e.clientY - s.y;
+    if (dy > 40) { s.moved = true; if (open) setOpen(false); else props.onHide(); }
+    else if (dy < -40) { s.moved = true; setOpen(true); }
+  };
   return (
     <section className={'sheet' + (open ? ' open' : '')} aria-label="Notes and page controls">
-      <button type="button" className="sheet-handle" aria-expanded={open} onClick={() => setOpen(!open)}
-        aria-label={open ? 'Hide notes' : `Show notes (${counts.notes} notes, ${counts.highlights} highlights)`}>
-        <span />
-      </button>
+      <div className="sheet-top">
+        <button type="button" className="sheet-handle" aria-expanded={open}
+          onPointerDown={onHandleDown} onPointerUp={onHandleUp}
+          onClick={() => { if (swipe.current?.moved) { swipe.current = null; return; } swipe.current = null; setOpen(!open); }}
+          aria-label={open ? 'Show fewer controls' : `Show notes (${counts.notes} notes, ${counts.highlights} highlights)`}>
+          <span />
+        </button>
+        <button type="button" className="icon-btn sm sheet-hide" onClick={props.onHide}
+          aria-label="Hide the notes panel" title="Hide (bring it back with the notes button)">
+          <IconChevronDown size={20} />
+        </button>
+      </div>
       {open && (
         <div className="sheet-expanded">
           {props.extras}

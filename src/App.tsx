@@ -156,6 +156,7 @@ export default function App() {
           isPhone={isPhone}
           paper={settings.paperTheme}
           thumbUrl={thumb}
+          sheetHidden={settings.notesPanelHidden}
           onMid={() => {
             if (anim.mode === 'open') setReaderShown(true);
             else { setReaderShown(false); setOpen(null); }
