@@ -9,7 +9,19 @@ import { Page } from './Page';
 import { Spread } from './Spread';
 import { SelectionToolbar, type SelectionInfo } from './SelectionToolbar';
 import { NoteCard, NoteComposer, NotesPanel, NotesTabs, ExportPanel, noteCounts, sortNotes, type NotesTab } from './NotesPanel';
-import { IconBook, IconBookmark, IconChevronLeft, IconChevronRight, IconSearch, IconText, IconX } from './Icons';
+import { IconBook, IconBookmark, IconMinus, IconPlus, IconChevronLeft, IconChevronRight, IconSearch, IconText, IconX } from './Icons';
+
+export const MIN_ZOOM = 1;
+const BOOK_STEPS = [1, 1.25, 1.5, 1.75, 2, 2.5, 3];
+const TEXT_STEPS = [1, 1.15, 1.3, 1.5, 1.75, 2];
+/** Text mode reflows, so it needs less magnification than a fixed PDF page. */
+function maxZoomFor(mode: 'book' | 'text') { return mode === 'text' ? 2 : 3; }
+function clampZoom(z: number, mode: 'book' | 'text') { return Math.min(maxZoomFor(mode), Math.max(MIN_ZOOM, z || 1)); }
+function stepZoom(z: number, dir: 1 | -1, mode: 'book' | 'text') {
+  const steps = mode === 'text' ? TEXT_STEPS : BOOK_STEPS;
+  if (dir > 0) return steps.find((x) => x > z + 0.01) ?? steps[steps.length - 1];
+  return [...steps].reverse().find((x) => x < z - 0.01) ?? steps[0];
+}
 
 interface Props {
   book: Book;
@@ -65,6 +77,77 @@ export function Reader({ book, isPhone, initialPage, initialNoteId, onBack }: Pr
   const mode = book.readingMode;
   const margin = isPhone ? 8 : 12;
 
+  // ---------- zoom ----------
+  const zoom = clampZoom(settings.zoom ?? 1, mode);
+  const setZoom = useCallback((z: number) => void updateSettings({ zoom: clampZoom(Math.round(z * 100) / 100, mode) }), [mode]);
+  const zoomIn = useCallback(() => setZoom(stepZoom(zoom, 1, mode)), [zoom, setZoom, mode]);
+  const zoomOut = useCallback(() => setZoom(stepZoom(zoom, -1, mode)), [zoom, setZoom, mode]);
+  const zoomReset = useCallback(() => setZoom(1), [setZoom]);
+  const stageRef = useRef<HTMLDivElement>(null);
+  const spreadWrapRef = useRef<HTMLDivElement>(null);
+
+  // Ctrl/Cmd + mouse wheel (and trackpad pinch, which browsers report the same way) zooms the page.
+  useEffect(() => {
+    const el = stageRef.current;
+    if (!el) return;
+    let acc = 0;
+    const onWheel = (e: WheelEvent) => {
+      if (!e.ctrlKey && !e.metaKey) return;
+      e.preventDefault();
+      acc += e.deltaY;
+      if (Math.abs(acc) < 40) return;
+      setZoom(stepZoom(zoom, acc < 0 ? 1 : -1, mode));
+      acc = 0;
+    };
+    el.addEventListener('wheel', onWheel, { passive: false });
+    return () => el.removeEventListener('wheel', onWheel);
+  }, [zoom, setZoom, mode]);
+
+  // Two-finger pinch on touch screens: live preview with a CSS scale, then re-render sharp at the new zoom.
+  useEffect(() => {
+    const el = stageRef.current;
+    if (!el) return;
+    const pts = new Map<number, { x: number; y: number }>();
+    let startDist = 0;
+    let ratio = 1;
+    const dist = () => { const [a, b] = [...pts.values()]; return Math.hypot(a.x - b.x, a.y - b.y); };
+    const preview = (r: number) => {
+      const w = spreadWrapRef.current;
+      if (w) w.style.transform = r === 1 ? '' : `scale(${r})`;
+    };
+    const down = (e: PointerEvent) => {
+      if (e.pointerType !== 'touch') return;
+      pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (pts.size === 2) { startDist = dist(); ratio = 1; }
+    };
+    const move = (e: PointerEvent) => {
+      if (!pts.has(e.pointerId)) return;
+      pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (pts.size === 2 && startDist > 0) {
+        ratio = Math.max(MIN_ZOOM / zoom, Math.min(maxZoomFor(mode) / zoom, dist() / startDist));
+        preview(ratio);
+      }
+    };
+    const up = (e: PointerEvent) => {
+      if (!pts.delete(e.pointerId)) return;
+      if (startDist > 0 && pts.size < 2) {
+        startDist = 0;
+        preview(1);
+        if (Math.abs(ratio - 1) > 0.08) setZoom(Math.round(zoom * ratio * 4) / 4); // snap to 25% steps
+      }
+    };
+    el.addEventListener('pointerdown', down);
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+    window.addEventListener('pointercancel', up);
+    return () => {
+      el.removeEventListener('pointerdown', down);
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+      window.removeEventListener('pointercancel', up);
+    };
+  }, [zoom, setZoom, mode]);
+
   // ---------- load the PDF ----------
   useEffect(() => {
     let alive = true;
@@ -116,11 +199,12 @@ export function Reader({ book, isPhone, initialPage, initialNoteId, onBack }: Pr
     if (!doc || mode !== 'book') return;
     const ahead = geo.phone ? [page + 1, page + 2, page - 1] : [pages[1] + 1, pages[1] + 2, pages[0] - 1];
     const t = setTimeout(() => {
-      for (const p of ahead) if (p >= 1 && p <= count) renderPage(book.id, doc, p, geo.pageW, geo.pageH, margin).catch(() => {});
-    }, 120);
+      const W = Math.round(geo.pageW * zoom), H = Math.round(geo.pageH * zoom), M = Math.round(margin * zoom);
+      for (const p of ahead) if (p >= 1 && p <= count) renderPage(book.id, doc, p, W, H, M).catch(() => {});
+    }, 160);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [doc, page, mode, geo.pageW, geo.pageH, geo.phone]);
+  }, [doc, page, mode, geo.pageW, geo.pageH, geo.phone, zoom]);
 
   // ---------- keyboard ----------
   useEffect(() => {
@@ -131,6 +215,9 @@ export function Reader({ book, isPhone, initialPage, initialNoteId, onBack }: Pr
       else if (e.key === 'ArrowLeft' || e.key === 'PageUp') { e.preventDefault(); prev(); }
       else if (e.key === 'Home') { e.preventDefault(); go(1); }
       else if (e.key === 'End') { e.preventDefault(); go(count); }
+      else if (e.key === '+' || e.key === '=') { e.preventDefault(); zoomIn(); }
+      else if (e.key === '-' || e.key === '_') { e.preventDefault(); zoomOut(); }
+      else if (e.key === '0') { e.preventDefault(); zoomReset(); }
       else if (e.key === 'Escape' && !searchOpen) {
         const sel = window.getSelection();
         if (sel && !sel.isCollapsed) sel.removeAllRanges();
@@ -140,7 +227,7 @@ export function Reader({ book, isPhone, initialPage, initialNoteId, onBack }: Pr
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [next, prev, go, count, onBack, searchOpen, sheetOpen]);
+  }, [next, prev, go, count, onBack, searchOpen, sheetOpen, zoomIn, zoomOut, zoomReset]);
 
   // ---------- notes ----------
   const flash = (id: string) => {
@@ -193,10 +280,25 @@ export function Reader({ book, isPhone, initialPage, initialNoteId, onBack }: Pr
   const pct = count > 1 ? ((page - 1) / (count - 1)) * 100 : 100;
 
   const renderOne = (n: number, side: 'left' | 'right' | 'single') => (
-    <Page key={n} book={book} doc={doc} pageNum={n} w={geo.pageW} h={geo.pageH} mode={mode} margin={margin}
+    <Page key={n} book={book} doc={doc} pageNum={n} w={geo.pageW} h={geo.pageH} mode={mode} margin={margin} zoom={zoom}
       notes={notes.filter((x) => x.page === n)} flashId={flashId} side={side}
       onMarker={(note) => { selectNote(note); if (isPhone) setSheetOpen(true); }}
       onSwitchToBook={() => setMode('book')} />
+  );
+
+  const zoomControl = (
+    <div className="zoom-control" role="group" aria-label="Zoom">
+      <button type="button" className="icon-btn" aria-label="Zoom out" title="Zoom out (-)" disabled={zoom <= MIN_ZOOM} onClick={zoomOut}>
+        <IconMinus size={18} />
+      </button>
+      <button type="button" className="zoom-value" onClick={zoomReset} title="Reset zoom (0)"
+        aria-label={`Zoom ${Math.round(zoom * 100)} percent. Reset to 100 percent`}>
+        {Math.round(zoom * 100)}%
+      </button>
+      <button type="button" className="icon-btn" aria-label="Zoom in" title="Zoom in (+)" disabled={zoom >= maxZoomFor(mode)} onClick={zoomIn}>
+        <IconPlus size={18} />
+      </button>
+    </div>
   );
 
   const modeButton = (
@@ -237,6 +339,7 @@ export function Reader({ book, isPhone, initialPage, initialNoteId, onBack }: Pr
           <button type="button" className="btn btn-outline btn-back" onClick={onBack}><IconChevronLeft size={18} /> Shelf</button>
           <h1 className="reader-title">{book.title}</h1>
           <div className="reader-tools">
+            {zoomControl}
             {modeButton}
             <button type="button" className="icon-btn outline" aria-label="Search in book" aria-expanded={searchOpen} onClick={() => setSearchOpen((v) => !v)}>
               <IconSearch />
@@ -253,7 +356,7 @@ export function Reader({ book, isPhone, initialPage, initialNoteId, onBack }: Pr
       {searchOpen && doc && <BookSearch book={book} doc={doc} onClose={() => setSearchOpen(false)} onJump={(p) => { go(p); if (isPhone) setSearchOpen(false); }} phone={geo.phone} />}
 
       <div className="reader-body">
-        <div className="reader-stage" style={geo.phone ? undefined : { width: geo.areaW }}>
+        <div className="reader-stage" ref={stageRef} style={geo.phone ? undefined : { width: geo.areaW }}>
           <div style={geo.phone ? { position: 'absolute', left: 0, top: 0 } : { position: 'absolute', left: geo.x, top: geo.y - 64 }}>
             {loadError ? (
               <div className="page load-error" style={{ width: geo.pageW * (geo.phone ? 1 : 2), height: geo.pageH }}>
@@ -261,9 +364,11 @@ export function Reader({ book, isPhone, initialPage, initialNoteId, onBack }: Pr
                 <button type="button" className="btn btn-accent" onClick={onBack}>Back to shelf</button>
               </div>
             ) : (
-              <Spread pages={pages} pageW={geo.pageW} pageH={geo.pageH} renderPage={renderOne}
+              <div ref={spreadWrapRef} className="pinch-wrap">
+              <Spread pages={pages} swipe={zoom <= 1 || mode === 'text'} pageW={geo.pageW} pageH={geo.pageH} renderPage={renderOne}
                 animate={settings.pageAnimation} reduced={reduced}
                 canPrev={canPrev} canNext={canNext} onPrev={prev} onNext={next} />
+              </div>
             )}
             {!geo.phone && (
               <div className="reader-controls" style={{ width: geo.pageW * 2 }}>
@@ -288,7 +393,7 @@ export function Reader({ book, isPhone, initialPage, initialNoteId, onBack }: Pr
           activeNoteId={activeNoteId} onSelect={selectNote} color={sheetColor} setColor={setSheetColor}
           attachQuote={attach?.quote} onSubmit={onSubmitNote} onCancelAttach={() => setAttach(null)} inputRef={inputRef}
           slider={slider} prev={prev} next={next} canPrev={canPrev} canNext={canNext}
-          extras={<div className="sheet-tools">{modeButton}
+          extras={<div className="sheet-tools">{zoomControl}{modeButton}
             <button type="button" className="icon-btn outline" aria-label="Search in book" onClick={() => { setSearchOpen(true); setSheetOpen(false); }}><IconSearch /></button>
             {themeSwitch}</div>}
         />

@@ -12,6 +12,8 @@ interface Props {
   animate: boolean;
   reduced: boolean;
   canPrev: boolean;
+  /** Swipe to turn pages (off while a zoomed page needs swiping to move around). */
+  swipe?: boolean;
   canNext: boolean;
   onPrev: () => void;
   onNext: () => void;
@@ -23,7 +25,7 @@ const EASE = 'cubic-bezier(.45,.05,.3,1)';
 const TURN_MS = 420;
 
 /** The open book: two fitted pages with a soft spine shadow, and a page that curls over when turning. */
-export function Spread({ pages, pageW, pageH, renderPage, animate, reduced, canPrev, canNext, onPrev, onNext }: Props) {
+export function Spread({ pages, pageW, pageH, renderPage, animate, reduced, canPrev, canNext, onPrev, onNext, swipe: swipeOn = true }: Props) {
   const span = pages.length;
   const [shown, setShown] = useState(pages);
   const [turn, setTurn] = useState<Turn | null>(null);
@@ -87,7 +89,7 @@ export function Spread({ pages, pageW, pageH, renderPage, animate, reduced, canP
   // Swipe to turn on touch screens.
   const swipe = useRef<{ x: number; y: number; t: number } | null>(null);
   const onPointerDown = (e: React.PointerEvent) => {
-    if (e.pointerType === 'mouse') return;
+    if (e.pointerType === 'mouse' || !swipeOn) return;
     swipe.current = { x: e.clientX, y: e.clientY, t: Date.now() };
   };
   const onPointerUp = (e: React.PointerEvent) => {

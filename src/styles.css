@@ -378,7 +378,7 @@ textarea.input { resize: vertical; }
 .spread.single { box-shadow: none; }
 .spread-pages { display: flex; height: 100%; }
 .spread-slot { flex: none; }
-.page { position: relative; background: var(--paper); color: var(--ink); overflow: hidden; }
+.page { position: relative; background: var(--paper); color: var(--ink); overflow: hidden; -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; }
 .page-left { border-radius: 3px 0 0 3px; }
 .page-right { border-radius: 0 3px 3px 0; }
 .gutter {
@@ -387,6 +387,17 @@ textarea.input { resize: vertical; }
 }
 .paper-night .gutter { background: linear-gradient(to right, transparent, rgba(0, 0, 0, .25) 49%, rgba(0, 0, 0, .3) 50%, transparent); }
 .fitbox { position: absolute; }
+/* Zoom: the page frame stays put and the magnified page scrolls inside it. */
+.page-scroll { position: absolute; inset: 0; overflow: hidden; }
+.page-scroll.zoomed { overflow: auto; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: rgba(100, 116, 139, .45) transparent; cursor: grab; }
+.page-zoom { position: relative; }
+.pinch-wrap { transform-origin: center center; }
+/* Stop the browser's own pinch-zoom (which only stretches pixels); the reader re-renders sharp instead. */
+.reader-stage { touch-action: pan-x pan-y; }
+.zoom-control { display: inline-flex; align-items: center; border: 1px solid var(--border); border-radius: 999px; padding: 0 2px; }
+.zoom-control .icon-btn { width: 40px; height: 40px; }
+.zoom-value { min-width: 52px; height: 40px; border: 0; background: transparent; color: var(--text); font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums; border-radius: 8px; }
+.zoom-value:hover { background: var(--field); }
 .page-canvas { display: block; width: 100%; height: 100%; }
 .paper-day .page-canvas, .paper-sepia .page-canvas { mix-blend-mode: multiply; }
 .paper-night .page-canvas { filter: invert(.88) hue-rotate(180deg); mix-blend-mode: lighten; }
@@ -423,7 +434,7 @@ textarea.input { resize: vertical; }
 
 .text-page {
   position: absolute; inset: 0; overflow-y: auto; padding: 44px 40px 40px; font-family: var(--font-serif);
-  font-size: 17px; line-height: 1.72; color: var(--ink); font-variation-settings: 'opsz' 16; outline: none;
+  font-size: calc(17px * var(--text-zoom, 1)); line-height: 1.72; color: var(--ink); font-variation-settings: 'opsz' 16; outline: none;
   scrollbar-width: thin; scrollbar-color: rgba(100, 116, 139, .35) transparent;
 }
 .text-page p { margin: 0 0 1em; overflow-wrap: anywhere; }
@@ -516,7 +527,7 @@ textarea.input { resize: vertical; }
 .book-search-results { display: flex; flex-direction: column; }
 
 /* Phone reader */
-.reader.phone .text-page { padding: 26px 20px 48px; font-size: 17.5px; }
+.reader.phone .text-page { padding: 26px 20px 48px; font-size: calc(17.5px * var(--text-zoom, 1)); }
 .reader.phone .reader-topbar { border-bottom: 0; }
 .sheet {
   position: absolute; left: 0; right: 0; bottom: 0; z-index: 20; background: #0F172A; color: #F1F5F9;

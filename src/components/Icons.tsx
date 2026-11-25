@@ -14,6 +14,7 @@ function Svg({ size = 20, children, ...rest }: P) {
 export const IconLibrary = (p: P) => <Svg {...p}><path d="M5 4v16M10 4v16M15 5.5l4 14.5" /></Svg>;
 export const IconSearch = (p: P) => <Svg {...p}><circle cx="11" cy="11" r="7" /><path d="m20 20-3.5-3.5" /></Svg>;
 export const IconPlus = (p: P) => <Svg {...p}><path d="M12 5v14M5 12h14" /></Svg>;
+export const IconMinus = (p: P) => <Svg {...p}><path d="M5 12h14" /></Svg>;
 export const IconChevronLeft = (p: P) => <Svg {...p}><path d="m15 18-6-6 6-6" /></Svg>;
 export const IconChevronRight = (p: P) => <Svg {...p}><path d="m9 18 6-6-6-6" /></Svg>;
 export const IconBookmark = ({ filled, ...p }: P & { filled?: boolean }) => (

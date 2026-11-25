@@ -14,6 +14,8 @@ export interface Settings {
   coverFromFirstPage: boolean;
   /** Download every shared book to this device so the whole library works offline. */
   keepOffline: boolean;
+  /** Reader zoom: page magnification in book mode, text size in text mode (1 = 100%). */
+  zoom: number;
 }
 
 export interface Session { userId: string; email: string }
@@ -43,6 +45,7 @@ const DEFAULT_SETTINGS: Settings = {
   defaultMode: 'book',
   coverFromFirstPage: false,
   keepOffline: false,
+  zoom: 1,
 };
 
 let state: State = {

@@ -126,11 +126,22 @@ export interface Rendered { canvas: HTMLCanvasElement; fit: Fit; page: PDFPagePr
 
 const renderCache = new Map<string, Promise<Rendered>>();
 const resolved = new Map<string, Rendered>();
-const MAX_CACHE = 18;
+const pixels = new Map<string, number>();
+/** Keep cached pages under ~40M pixels (~160 MB) so zooming never exhausts phone memory. */
+const CACHE_PIXELS = 40_000_000;
+/** Largest single canvas (browsers refuse ~16.7M+ on phones). */
+const MAX_CANVAS_PIXELS = 12_000_000;
+
+/**
+ * Pixel density to draw at. At least 2x even on 1x screens: drawing finer and letting the
+ * browser downscale gives clearly smoother, sharper text on small book pages.
+ */
+function renderDensity() {
+  return Math.min(Math.max(window.devicePixelRatio || 1, 2), 3);
+}
 
 function renderKey(bookId: string, pageNum: number, frameW: number, frameH: number, margin: number) {
-  const dpr = Math.min(window.devicePixelRatio || 1, 3);
-  return `${bookId}:${pageNum}:${Math.round(frameW)}x${Math.round(frameH)}:${margin}@${dpr}`;
+  return `${bookId}:${pageNum}:${Math.round(frameW)}x${Math.round(frameH)}:${Math.round(margin)}@${renderDensity()}`;
 }
 
 /** A page that is already rendered, so it can be drawn before the next paint (no blank flash). */
@@ -138,17 +149,31 @@ export function peekRendered(bookId: string, pageNum: number, frameW: number, fr
   return resolved.get(renderKey(bookId, pageNum, frameW, frameH, margin));
 }
 
-/** Contain-fit a page of size (pw, ph) into a frame, leaving a small paper margin. */
+/**
+ * Contain-fit a page of size (pw, ph) into a frame, leaving a small paper margin.
+ * Position and size are whole CSS pixels: a canvas placed at a fractional pixel is resampled and looks blurry.
+ */
 export function fitPage(pw: number, ph: number, frameW: number, frameH: number, margin: number): Fit {
   const scale = Math.min((frameW - margin * 2) / pw, (frameH - margin * 2) / ph);
-  const w = pw * scale, h = ph * scale;
-  return { x: (frameW - w) / 2, y: (frameH - h) / 2, w, h, scale };
+  const w = Math.max(1, Math.round(pw * scale)), h = Math.max(1, Math.round(ph * scale));
+  return { x: Math.round((frameW - w) / 2), y: Math.round((frameH - h) / 2), w, h, scale };
+}
+
+function evict() {
+  let total = 0;
+  for (const v of pixels.values()) total += v;
+  while ((total > CACHE_PIXELS || renderCache.size > 24) && renderCache.size > 2) {
+    const [oldest] = renderCache.keys();
+    total -= pixels.get(oldest) ?? 0;
+    renderCache.delete(oldest);
+    resolved.delete(oldest);
+    pixels.delete(oldest);
+  }
 }
 
 export function renderPage(
   bookId: string, doc: PDFDocumentProxy, pageNum: number, frameW: number, frameH: number, margin: number,
 ): Promise<Rendered> {
-  const dpr = Math.min(window.devicePixelRatio || 1, 3);
   const key = renderKey(bookId, pageNum, frameW, frameH, margin);
   const hit = renderCache.get(key);
   if (hit) {
@@ -160,25 +185,25 @@ export function renderPage(
     const page = await doc.getPage(pageNum);
     const base = page.getViewport({ scale: 1 });
     const fit = fitPage(base.width, base.height, frameW, frameH, margin);
-    const vp = page.getViewport({ scale: fit.scale * dpr });
+    // Canvas pixels map exactly onto the fitted CSS box (w x h) at the render density.
+    let density = renderDensity();
+    if (fit.w * fit.h * density * density > MAX_CANVAS_PIXELS) density = Math.sqrt(MAX_CANVAS_PIXELS / (fit.w * fit.h));
+    const cw = Math.max(1, Math.round(fit.w * density)), ch = Math.max(1, Math.round(fit.h * density));
+    const vp = page.getViewport({ scale: cw / base.width });
     const canvas = document.createElement('canvas');
-    canvas.width = Math.max(1, Math.floor(vp.width));
-    canvas.height = Math.max(1, Math.floor(vp.height));
+    canvas.width = cw;
+    canvas.height = ch;
     const ctx = canvas.getContext('2d', { alpha: false })!;
     ctx.fillStyle = '#ffffff';
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillRect(0, 0, cw, ch);
     await page.render({ canvasContext: ctx, viewport: vp }).promise;
     const out = { canvas, fit, page };
-    if (renderCache.has(key)) resolved.set(key, out);
+    if (renderCache.has(key)) { resolved.set(key, out); pixels.set(key, cw * ch); evict(); }
     return out;
   })();
   renderCache.set(key, p);
-  p.catch(() => renderCache.delete(key));
-  while (renderCache.size > MAX_CACHE) {
-    const [oldest] = renderCache.keys();
-    renderCache.delete(oldest);
-    resolved.delete(oldest);
-  }
+  p.catch(() => { renderCache.delete(key); pixels.delete(key); });
+  evict();
   return p;
 }
 

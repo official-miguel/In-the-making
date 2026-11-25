@@ -15,6 +15,8 @@ export interface PageProps {
   notes: Note[];
   flashId: string | null;
   margin: number;
+  /** 1 = fit the page; >1 = magnified (book mode scrolls, text mode gets bigger letters). */
+  zoom: number;
   onMarker?: (note: Note) => void;
   onSwitchToBook?: () => void;
   side?: 'left' | 'right' | 'single';
@@ -51,7 +53,11 @@ function EndPaper() {
   return <div className="end-paper"><span>The end</span></div>;
 }
 
-function PdfCanvasPage({ book, doc, pageNum, w, h, notes, flashId, margin, onMarker }: PageProps) {
+function PdfCanvasPage({ book, doc, pageNum, w: frameW, h: frameH, notes, flashId, margin: frameMargin, zoom, onMarker }: PageProps) {
+  // Zoom renders the page larger (sharp, not stretched) inside the same page frame, which then scrolls.
+  const w = Math.round(frameW * zoom), h = Math.round(frameH * zoom), margin = Math.round(frameMargin * zoom);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const prevZoom = useRef(zoom);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const textRef = useRef<HTMLDivElement>(null);
   const [fit, setFit] = useState<Fit | null>(() => peekRendered(book.id, pageNum, w, h, margin)?.fit ?? null);
@@ -102,9 +108,23 @@ function PdfCanvasPage({ book, doc, pageNum, w, h, notes, flashId, margin, onMar
     return () => { alive = false; cleanup(); };
   }, [doc, book.id, pageNum, w, h, margin]);
 
+  // Keep the same spot in the middle of the view when zooming in or out.
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    const before = prevZoom.current;
+    prevZoom.current = zoom;
+    if (!el || before === zoom) return;
+    const k = zoom / before;
+    const cx = el.scrollLeft + el.clientWidth / 2, cy = el.scrollTop + el.clientHeight / 2;
+    el.scrollLeft = cx * k - el.clientWidth / 2;
+    el.scrollTop = cy * k - el.clientHeight / 2;
+  }, [zoom]);
+
   const marked = notes.filter((n) => n.rects?.length);
   return (
-    <>
+    <div ref={scrollRef} className={'page-scroll' + (zoom > 1 ? ' zoomed' : '')} tabIndex={zoom > 1 ? 0 : undefined}
+      aria-label={zoom > 1 ? `Page ${pageNum}, zoomed ${Math.round(zoom * 100)}%. Scroll to move around.` : undefined}>
+    <div className="page-zoom" style={{ width: w, height: h }}>
       {!fit && !failed && <div className="page-loading" aria-hidden="true"><span /></div>}
       {failed && <div className="page-error">This page could not be drawn.</div>}
       <div className="fitbox" style={fit ? { left: fit.x, top: fit.y, width: fit.w, height: fit.h } : { display: 'none' }}>
@@ -125,11 +145,12 @@ function PdfCanvasPage({ book, doc, pageNum, w, h, notes, flashId, margin, onMar
           </button>
         ))}
       </div>
-    </>
+    </div>
+    </div>
   );
 }
 
-function TextPage({ book, doc, pageNum, notes, flashId, onSwitchToBook }: PageProps) {
+function TextPage({ book, doc, pageNum, notes, flashId, zoom, onSwitchToBook }: PageProps) {
   const [paras, setParas] = useState<string[] | null>(null);
   useEffect(() => {
     if (!doc) return;
@@ -153,7 +174,7 @@ function TextPage({ book, doc, pageNum, notes, flashId, onSwitchToBook }: PagePr
   }
   const quoted = notes.filter((n) => n.quote && n.quote.length > 2);
   return (
-    <div className="text-page" tabIndex={0} aria-label={`Page ${pageNum} text`}>
+    <div className="text-page" tabIndex={0} aria-label={`Page ${pageNum} text`} style={{ ['--text-zoom' as string]: zoom }}>
       {paras.map((p, i) => <p key={i}>{markQuotes(p, quoted, flashId)}</p>)}
     </div>
   );
