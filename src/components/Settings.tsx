@@ -76,6 +76,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
 /** Sign in to share the books you add with everyone. Reading the library needs no account. */
 function AccountSetting() {
   const session = useStore((st) => st.session);
+  const problem = useStore((st) => st.syncProblem);
   const [email, setEmail] = useState('');
   const [state, setState] = useState<'idle' | 'sending' | 'sent'>('idle');
   if (!cloud) {
@@ -86,7 +87,16 @@ function AccountSetting() {
       </div>
     );
   }
-  if (session) {
+  if (problem && !session) {
+    return (
+      <div className="setting column">
+        <span className="setting-label">Shared library</span>
+        <span className="setting-hint sync-problem">Books are not being shared: {problem}</span>
+        <button type="button" className="btn btn-outline" onClick={() => requestSync(50)}>Try again</button>
+      </div>
+    );
+  }
+  if (session && session.email) {
     return (
       <div className="setting">
         <span>
@@ -94,6 +104,14 @@ function AccountSetting() {
           <span className="setting-hint">Signed in as {session.email}. Books you add are shared with everyone.</span>
         </span>
         <button type="button" className="btn btn-outline" onClick={() => void signOut()}>Sign out</button>
+      </div>
+    );
+  }
+  if (session) {
+    return (
+      <div className="setting column">
+        <span className="setting-label">Shared library</span>
+        <span className="setting-hint">On — every book you add is shared with all devices automatically. No account needed.</span>
       </div>
     );
   }

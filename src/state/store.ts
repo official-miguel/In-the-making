@@ -37,6 +37,8 @@ export interface State {
   toasts: Toast[];
   /** Signed-in user for the shared library (null = signed out). */
   session: Session | null;
+  /** Why books are not being shared right now (shown in Settings), or null. */
+  syncProblem: string | null;
 }
 
 const DEFAULT_SETTINGS: Settings = {
@@ -51,7 +53,7 @@ const DEFAULT_SETTINGS: Settings = {
 
 let state: State = {
   ready: false, books: [], collections: [], notes: [], bookmarks: [],
-  settings: DEFAULT_SETTINGS, imports: [], toasts: [], session: null,
+  settings: DEFAULT_SETTINGS, imports: [], toasts: [], session: null, syncProblem: null,
 };
 
 const listeners = new Set<() => void>();
@@ -345,6 +347,69 @@ export async function moveBook(id: string, collectionId: string, beforeId: strin
   const d = await db();
   const tx = d.transaction('books', 'readwrite');
   await Promise.all([...books.map((b) => tx.store.put(b)), tx.done]);
+}
+
+async function saveOrder(ordered: Book[]) {
+  const books = ordered.map((b, i) => ({ ...b, orderIndex: i }));
+  set({ books });
+  const d = await db();
+  const tx = d.transaction('books', 'readwrite');
+  await Promise.all([...books.map((b) => tx.store.put(b)), tx.done]);
+}
+
+export type SortBy = 'title' | 'recent' | 'added' | 'color';
+
+/** Sort the books of one row. */
+export async function sortCollection(collectionId: string, by: SortBy) {
+  const inRow = state.books.filter((b) => b.collectionId === collectionId);
+  const palette = ['#E11D48', '#F97316', '#F59E0B', '#10B981', '#14B8A6', '#0EA5E9', '#3B82F6', '#7C3AED', '#EC4899'];
+  const cmp: Record<SortBy, (a: Book, b: Book) => number> = {
+    title: (a, b) => a.title.localeCompare(b.title, undefined, { sensitivity: 'base', numeric: true }),
+    recent: (a, b) => (b.lastOpenedAt || 0) - (a.lastOpenedAt || 0) || a.title.localeCompare(b.title),
+    added: (a, b) => b.createdAt - a.createdAt,
+    color: (a, b) => palette.indexOf(a.color.toUpperCase()) - palette.indexOf(b.color.toUpperCase()) || a.title.localeCompare(b.title),
+  };
+  const sorted = [...inRow].sort(cmp[by]);
+  let i = 0;
+  // Keep the row in place among the others; only its own books change order.
+  await saveOrder(state.books.map((b) => (b.collectionId === collectionId ? sorted[i++] : b)));
+}
+
+/** Move a book one place left/right; at the end of a row it hops to the next/previous row. */
+export async function nudgeBook(id: string, dir: -1 | 1) {
+  const book = state.books.find((b) => b.id === id);
+  if (!book) return;
+  const row = state.books.filter((b) => b.collectionId === book.collectionId);
+  const i = row.findIndex((b) => b.id === id);
+  const target = i + dir;
+  if (target >= 0 && target < row.length) {
+    const before = dir < 0 ? row[target].id : row[target + 1]?.id ?? null;
+    await moveBook(id, book.collectionId, before);
+    return;
+  }
+  const ci = state.collections.findIndex((c) => c.id === book.collectionId);
+  const next = state.collections[ci + dir];
+  if (!next) return;
+  if (dir > 0) {
+    const first = state.books.find((b) => b.collectionId === next.id);
+    await moveBook(id, next.id, first?.id ?? null);
+  } else {
+    await moveBook(id, next.id, null);
+  }
+}
+
+/** Move a whole row up or down the shelf. */
+export async function moveCollection(id: string, dir: -1 | 1) {
+  const cols = [...state.collections];
+  const i = cols.findIndex((c) => c.id === id);
+  const j = i + dir;
+  if (i < 0 || j < 0 || j >= cols.length) return;
+  [cols[i], cols[j]] = [cols[j], cols[i]];
+  const collections = cols.map((c, k) => ({ ...c, orderIndex: k }));
+  set({ collections });
+  const d = await db();
+  const tx = d.transaction('collections', 'readwrite');
+  await Promise.all([...collections.map((c) => tx.store.put(c)), tx.done]);
 }
 
 export async function markOpened(id: string) {

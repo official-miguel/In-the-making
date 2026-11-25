@@ -15,6 +15,10 @@ export const IconLibrary = (p: P) => <Svg {...p}><path d="M5 4v16M10 4v16M15 5.5
 export const IconSearch = (p: P) => <Svg {...p}><circle cx="11" cy="11" r="7" /><path d="m20 20-3.5-3.5" /></Svg>;
 export const IconPlus = (p: P) => <Svg {...p}><path d="M12 5v14M5 12h14" /></Svg>;
 export const IconMinus = (p: P) => <Svg {...p}><path d="M5 12h14" /></Svg>;
+/** Four-way move arrows: "arrange". */
+export const IconArrange = (p: P) => <Svg {...p}><path d="M12 3v18M3 12h18M12 3l-3 3M12 3l3 3M12 21l-3-3M12 21l3-3M3 12l3-3M3 12l3 3M21 12l-3-3M21 12l-3 3" /></Svg>;
+export const IconArrowUp = (p: P) => <Svg {...p}><path d="M12 19V5M5 12l7-7 7 7" /></Svg>;
+export const IconArrowDown = (p: P) => <Svg {...p}><path d="M12 5v14M19 12l-7 7-7-7" /></Svg>;
 export const IconChevronLeft = (p: P) => <Svg {...p}><path d="m15 18-6-6 6-6" /></Svg>;
 export const IconChevronRight = (p: P) => <Svg {...p}><path d="m9 18 6-6-6-6" /></Svg>;
 export const IconBookmark = ({ filled, ...p }: P & { filled?: boolean }) => (

@@ -589,3 +589,27 @@ textarea.input { resize: vertical; }
   .reader-tools { gap: 8px; }
   .segmented button { padding: 0 12px; }
 }
+
+/* ===== Arrange mode ===== */
+.arrange-bar {
+  display: flex; align-items: center; justify-content: space-between; gap: 16px;
+  margin: 16px clamp(16px, 5.6vw, 72px) 0; padding: 10px 10px 10px 16px; border-radius: 12px;
+  background: var(--accent-soft); border: 1px solid var(--accent); color: var(--text); font-size: 14px;
+}
+.arrange-bar.phone { margin: 0 20px 12px; font-size: 13px; }
+.arranging .spine { cursor: grab; touch-action: none; }
+.arranging .spine:active { cursor: grabbing; }
+.arranging .spine-face { outline: 1px dashed rgba(255, 255, 255, .55); outline-offset: -3px; }
+.arranging .spine:focus-visible { transform: translateY(-8px); }
+/* The gap a dragged book will drop into; neighbours slide to make room. */
+.spine-gap {
+  display: block; flex: none; border-radius: 3px; border: 2px dashed var(--accent);
+  background: var(--accent-soft); box-shadow: 0 0 14px var(--glow);
+}
+.board-books > *, .book-slot { transition: transform .18s var(--ease); }
+.drag-ghost { cursor: grabbing; }
+.row-tools { display: flex; align-items: center; gap: 4px; }
+.row-sort { width: auto; min-width: 140px; }
+.drop-hint.arrange-empty { pointer-events: none; }
+.sync-problem { color: #FDA4AF; }
+:root[data-theme="day"] .sync-problem, :root[data-theme="sepia"] .sync-problem { color: #BE123C; }

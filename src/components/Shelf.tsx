@@ -1,12 +1,15 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { Book, Collection } from '../lib/db';
 import {
-  addCollection, addFiles, deleteCollection, moveBook, renameCollection, useStore,
+  addCollection, addFiles, deleteCollection, moveBook, moveCollection, nudgeBook, renameCollection, sortCollection,
+  useStore, type SortBy,
 } from '../state/store';
 import { BookSpine, PHONE_SPINE_SCALE, SpineFace, spineSize } from './BookSpine';
 import { BookCard } from './BookCard';
 import { InstallBanner, InstallButton } from './Install';
-import { IconLibrary, IconNote, IconPlus, IconSearch, IconSettings, IconTrash, IconX } from './Icons';
+import {
+  IconArrange, IconArrowDown, IconArrowUp, IconCheck, IconLibrary, IconNote, IconPlus, IconSearch, IconSettings, IconTrash, IconX,
+} from './Icons';
 
 interface Props {
   isPhone: boolean;
@@ -36,6 +39,8 @@ export function Shelf({ isPhone, hiddenBookId, onOpen, onShowNotes, onShowSettin
   const [drop, setDrop] = useState<Drop | null>(null);
   const [fileOver, setFileOver] = useState(false);
   const [editingRow, setEditingRow] = useState<string | null>(null);
+  /** Arrange mode: clicks don't open books, touch drags start instantly, row tools are shown. */
+  const [arranging, setArranging] = useState(false);
   const [width, setWidth] = useState(1000);
   const wrapRef = useRef<HTMLDivElement>(null);
   const hoverTimer = useRef<number>();
@@ -70,11 +75,27 @@ export function Shelf({ isPhone, hiddenBookId, onOpen, onShowNotes, onShowSettin
   }, [q, books, notes]);
 
   // ---------- packing books onto boards ----------
+  // While dragging, lay the shelf out as if the book were already dropped, so the others slide apart.
+  const layoutBooks = useMemo(() => {
+    if (!drag || !drop) return books;
+    const moving = books.find((b) => b.id === drag.id);
+    if (!moving) return books;
+    const rest = books.filter((b) => b.id !== drag.id);
+    const moved = { ...moving, collectionId: drop.collectionId };
+    if (drop.beforeId) {
+      const i = rest.findIndex((b) => b.id === drop.beforeId);
+      if (i >= 0) return [...rest.slice(0, i), moved, ...rest.slice(i)];
+    }
+    let last = -1;
+    rest.forEach((b, i) => { if (b.collectionId === drop.collectionId) last = i; });
+    return last < 0 ? [...rest, moved] : [...rest.slice(0, last + 1), moved, ...rest.slice(last + 1)];
+  }, [books, drag, drop]);
+
   const shelves = useMemo(() => {
     const capacity = Math.max(120, width - inset * 2);
     const out: { col: Collection; boards: Book[][] }[] = [];
     for (const col of collections) {
-      const list = books.filter((b) => b.collectionId === col.id);
+      const list = layoutBooks.filter((b) => b.collectionId === col.id);
       const boards: Book[][] = [[]];
       let used = 0;
       for (const b of list) {
@@ -92,7 +113,7 @@ export function Shelf({ isPhone, hiddenBookId, onOpen, onShowNotes, onShowSettin
     const total = out.reduce((s, x) => s + x.boards.length, 0);
     if (out.length && total < 2) for (let i = total; i < 2; i++) out[out.length - 1].boards.push([]);
     return out;
-  }, [books, collections, width, k, inset]);
+  }, [layoutBooks, collections, width, k, inset]);
 
   const flatOrder = useMemo(() => shelves.flatMap((s) => s.boards.flat().map((b) => b.id)), [shelves]);
   const continueBook = useMemo(
@@ -123,6 +144,19 @@ export function Shelf({ isPhone, hiddenBookId, onOpen, onShowNotes, onShowSettin
   };
 
   const onSpineKey = (e: React.KeyboardEvent, book: Book) => {
+    if (arranging && ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(e.key)) {
+      e.preventDefault();
+      const ci = collections.findIndex((c) => c.id === book.collectionId);
+      const done = () => focusBook(book.id);
+      if (e.key === 'ArrowLeft') void nudgeBook(book.id, -1).then(done);
+      else if (e.key === 'ArrowRight') void nudgeBook(book.id, 1).then(done);
+      else {
+        const target = collections[ci + (e.key === 'ArrowUp' ? -1 : 1)];
+        if (target) void moveBook(book.id, target.id, null).then(done);
+      }
+      return;
+    }
+    if (e.key === 'Escape' && arranging) { setArranging(false); return; }
     const i = flatOrder.indexOf(book.id);
     if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
       e.preventDefault();
@@ -154,13 +188,14 @@ export function Shelf({ isPhone, hiddenBookId, onOpen, onShowNotes, onShowSettin
   };
 
   // ---------- drag to reorder (mouse drag, long-press on touch) ----------
-  const pending = useRef<{ id: string; x: number; y: number; touch: boolean; timer?: number; el: HTMLElement } | null>(null);
+  const pending = useRef<{ id: string; x: number; y: number; touch: boolean; instant?: boolean; timer?: number; el: HTMLElement } | null>(null);
   const dragRef = useRef<Drag | null>(null);
   const dropRef = useRef<Drop | null>(null);
   const suppressClick = useRef(false);
 
   const computeDrop = useCallback((x: number, y: number, dragId: string): Drop | null => {
     const els = document.elementsFromPoint(x, y) as HTMLElement[];
+    if (els.some((el) => el.classList?.contains('spine-gap'))) return dropRef.current; // hovering the gap: keep it
     const spine = els.find((el) => el.classList?.contains('spine') && el.dataset.bookId && el.dataset.bookId !== dragId);
     if (spine) {
       const id = spine.dataset.bookId!;
@@ -177,6 +212,7 @@ export function Shelf({ isPhone, hiddenBookId, onOpen, onShowNotes, onShowSettin
     return null;
   }, [books]);
 
+  const scrollTimer = useRef<number>();
   const beginDrag = useCallback((x: number, y: number) => {
     const p = pending.current;
     if (!p) return;
@@ -186,7 +222,22 @@ export function Shelf({ isPhone, hiddenBookId, onOpen, onShowNotes, onShowSettin
     setDrag(d);
     setActiveId(null);
     if (p.touch) navigator.vibrate?.(12);
+    // Scroll the shelf when dragging near the top or bottom edge.
+    clearInterval(scrollTimer.current);
+    scrollTimer.current = window.setInterval(() => {
+      const cur = dragRef.current;
+      if (!cur) return;
+      const edge = 90;
+      const speed = cur.y < edge ? -(edge - cur.y) / 4 : cur.y > window.innerHeight - edge ? (cur.y - (window.innerHeight - edge)) / 4 : 0;
+      if (!speed) return;
+      window.scrollBy(0, speed);
+      const dr = computeDropRef.current(cur.x, cur.y, cur.id);
+      dropRef.current = dr;
+      setDrop(dr);
+    }, 16);
   }, []);
+  const computeDropRef = useRef(computeDrop);
+  computeDropRef.current = computeDrop;
 
   useEffect(() => {
     const move = (e: PointerEvent) => {
@@ -194,7 +245,7 @@ export function Shelf({ isPhone, hiddenBookId, onOpen, onShowNotes, onShowSettin
       if (!p) return;
       const dist = Math.hypot(e.clientX - p.x, e.clientY - p.y);
       if (!dragRef.current) {
-        if (!p.touch && dist > 6) beginDrag(e.clientX, e.clientY);
+        if ((!p.touch || p.instant) && dist > 6) beginDrag(e.clientX, e.clientY);
         else if (p.touch && dist > 10) { clearTimeout(p.timer); pending.current = null; }
         return;
       }
@@ -206,6 +257,7 @@ export function Shelf({ isPhone, hiddenBookId, onOpen, onShowNotes, onShowSettin
       setDrop(dr);
     };
     const up = () => {
+      clearInterval(scrollTimer.current);
       const p = pending.current;
       if (p?.timer) clearTimeout(p.timer);
       pending.current = null;
@@ -240,13 +292,15 @@ export function Shelf({ isPhone, hiddenBookId, onOpen, onShowNotes, onShowSettin
     lastPointer.current = e.pointerType;
     if (e.button !== 0) return;
     const touch = e.pointerType !== 'mouse';
-    pending.current = { id: book.id, x: e.clientX, y: e.clientY, touch, el: e.currentTarget };
-    if (touch) pending.current.timer = window.setTimeout(() => beginDrag(e.clientX, e.clientY), 420);
+    pending.current = { id: book.id, x: e.clientX, y: e.clientY, touch, instant: arranging, el: e.currentTarget };
+    // Outside arrange mode a touch drag needs a long press (so normal swipes still scroll the shelf).
+    if (touch && !arranging) pending.current.timer = window.setTimeout(() => beginDrag(e.clientX, e.clientY), 420);
   };
 
   const onSpineClick = (book: Book) => {
     if (suppressClick.current) return;
     setFocusId(book.id);
+    if (arranging) return; // in arrange mode a click only selects
     if (lastPointer.current !== 'mouse' && activeId !== book.id) {
       showCard(book.id); // first tap shows the card and full title
       return;
@@ -275,7 +329,7 @@ export function Shelf({ isPhone, hiddenBookId, onOpen, onShowNotes, onShowSettin
 
   return (
     <div
-      className={'shelf-screen' + (isPhone ? ' phone' : '')}
+      className={'shelf-screen' + (isPhone ? ' phone' : '') + (arranging ? ' arranging' : '')}
       onDragOver={onDragOver}
       onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setFileOver(false); }}
       onDrop={onFileDrop}
@@ -284,6 +338,10 @@ export function Shelf({ isPhone, hiddenBookId, onOpen, onShowNotes, onShowSettin
         <header className="phone-header">
           <h1 className="brand-title">My Library</h1>
           <div className="row gap8">
+            <button type="button" className={'icon-btn outline' + (arranging ? ' on' : '')} aria-pressed={arranging}
+              aria-label={arranging ? 'Done arranging' : 'Arrange books'} onClick={() => { setArranging((v) => !v); setActiveId(null); }}>
+              {arranging ? <IconCheck /> : <IconArrange />}
+            </button>
             <button type="button" className="icon-btn outline" aria-label="Settings" onClick={onShowSettings}><IconSettings /></button>
             <button type="button" className="icon-btn outline" aria-label={phoneSearch ? 'Close search' : 'Search books or notes'} aria-expanded={phoneSearch}
               onClick={() => { setPhoneSearch((v) => !v); setQuery(''); }}>
@@ -301,6 +359,10 @@ export function Shelf({ isPhone, hiddenBookId, onOpen, onShowNotes, onShowSettin
             <button type="button" className="icon-btn" aria-label="All notes" title="All notes" onClick={onShowNotes}><IconNote /></button>
             <button type="button" className="icon-btn" aria-label="Settings" title="Settings" onClick={onShowSettings}><IconSettings /></button>
             <SearchBox query={query} setQuery={setQuery} />
+            <button type="button" className={'btn ' + (arranging ? 'btn-accent' : 'btn-outline')} aria-pressed={arranging}
+              onClick={() => { setArranging((v) => !v); setActiveId(null); }}>
+              {arranging ? <><IconCheck size={18} /> Done</> : <><IconArrange size={18} /> Arrange</>}
+            </button>
             <InstallButton />
             <button type="button" className="btn btn-accent btn-add" onClick={pickFiles}><IconPlus size={18} /> Add PDF</button>
           </div>
@@ -311,6 +373,15 @@ export function Shelf({ isPhone, hiddenBookId, onOpen, onShowNotes, onShowSettin
 
       {isPhone && phoneSearch && (
         <div className="phone-search"><SearchBox query={query} setQuery={setQuery} autoFocus /></div>
+      )}
+
+      {arranging && (
+        <div className={'arrange-bar' + (isPhone ? ' phone' : '')} role="status">
+          <span>
+            <strong>Arrange your shelf.</strong> {isPhone ? 'Drag a book to move it.' : 'Drag a book to move it, or select one and use the arrow keys.'} Sort or move rows with the row tools.
+          </span>
+          <button type="button" className="btn btn-accent btn-sm" onClick={() => setArranging(false)}>Done</button>
+        </div>
       )}
 
       {matches && matches.noteHits.length > 0 && (
@@ -346,7 +417,7 @@ export function Shelf({ isPhone, hiddenBookId, onOpen, onShowNotes, onShowSettin
       <main className="shelf" ref={wrapRef} aria-label="Bookshelf">
         {shelves.map(({ col, boards }, ci) => (
           <section key={col.id} className="collection" aria-label={col.name}>
-            {(!isPhone || collections.length > 1) && (
+            {(!isPhone || collections.length > 1 || arranging) && (
               <div className="collection-head">
                 {editingRow === col.id ? (
                   <form className="row gap8" onSubmit={(e) => { e.preventDefault(); setEditingRow(null); }}>
@@ -365,17 +436,34 @@ export function Shelf({ isPhone, hiddenBookId, onOpen, onShowNotes, onShowSettin
                     {col.name}
                   </button>
                 )}
-                {ci === 0 && !isPhone && <span className="collection-hint">Drag a PDF anywhere on the shelf to add it</span>}
+                {arranging ? (
+                  <div className="row-tools">
+                    <label className="sr-only" htmlFor={`sort-${col.id}`}>Sort {col.name}</label>
+                    <select id={`sort-${col.id}`} className="input sm row-sort" value="" aria-label={`Sort ${col.name}`}
+                      onChange={(e) => { if (e.target.value) void sortCollection(col.id, e.target.value as SortBy); }}>
+                      <option value="">Sort row…</option>
+                      <option value="title">Title A–Z</option>
+                      <option value="recent">Recently read</option>
+                      <option value="added">Recently added</option>
+                      <option value="color">Colour</option>
+                    </select>
+                    <button type="button" className="icon-btn sm" aria-label={`Move row ${col.name} up`} disabled={ci === 0}
+                      onClick={() => moveCollection(col.id, -1)}><IconArrowUp size={16} /></button>
+                    <button type="button" className="icon-btn sm" aria-label={`Move row ${col.name} down`} disabled={ci === shelves.length - 1}
+                      onClick={() => moveCollection(col.id, 1)}><IconArrowDown size={16} /></button>
+                  </div>
+                ) : ci === 0 && !isPhone && <span className="collection-hint">Drag a PDF anywhere on the shelf to add it</span>}
               </div>
             )}
             {boards.map((row, ri) => {
-              const isLastBoard = ri === boards.length - 1;
               return (
                 <div key={ri} className="board-row" data-collection-id={col.id} style={{ height: isPhone ? 140 : 206 }}>
                   <div className="board-books" style={{ paddingLeft: inset, gap: GAP }}>
                     {row.map((b) => (
                       <Fragment key={b.id}>
-                        {drop && drop.beforeId === b.id && <span className="drop-marker" />}
+                        {drag?.id === b.id ? (
+                          <span className="spine-gap" style={{ width: spineSize(b, k).w, height: spineSize(b, k).h }} aria-hidden="true" />
+                        ) : (
                         <div className="book-slot" data-active={activeId === b.id || undefined}>
                           <BookSpine
                             book={b} k={k}
@@ -387,13 +475,13 @@ export function Shelf({ isPhone, hiddenBookId, onOpen, onShowNotes, onShowSettin
                             tabIndex={rovingId === b.id ? 0 : -1}
                             onPointerDown={(e) => onSpinePointerDown(e, b)}
                             onClick={() => onSpineClick(b)}
-                            onMouseEnter={() => !drag && showCard(b.id)}
+                            onMouseEnter={() => !drag && !arranging && showCard(b.id)}
                             onMouseLeave={hideCardSoon}
-                            onFocus={() => { setFocusId(b.id); showCard(b.id); }}
+                            onFocus={() => { setFocusId(b.id); if (!arranging) showCard(b.id); }}
                             onKeyDown={(e) => onSpineKey(e, b)}
                             onContextMenu={(e) => e.preventDefault()}
                           />
-                          {activeId === b.id && !drag && (
+                          {activeId === b.id && !drag && !arranging && (
                             <BookCard
                               book={b}
                               notesCount={notesByBook.get(b.id) || 0}
@@ -404,10 +492,13 @@ export function Shelf({ isPhone, hiddenBookId, onOpen, onShowNotes, onShowSettin
                             />
                           )}
                         </div>
+                        )}
                       </Fragment>
                     ))}
-                    {drop && drop.collectionId === col.id && drop.beforeId === null && isLastBoard && <span className="drop-marker" />}
-                    {row.length === 0 && (ci === 0 && ri === 0 ? firstEmpty : !books.some((b) => b.collectionId === col.id) && ri === 0) && (
+                    {row.length === 0 && arranging && ri === 0 && !layoutBooks.some((b) => b.collectionId === col.id) && (
+                      <span className="drop-hint arrange-empty" aria-hidden="true"><span className="drop-hint-sub">Drag books here</span></span>
+                    )}
+                    {row.length === 0 && !arranging && (ci === 0 && ri === 0 ? firstEmpty : !books.some((b) => b.collectionId === col.id) && ri === 0) && (
                       <button type="button" className="drop-hint" onClick={pickFiles}>
                         <span className="drop-hint-title">{ready ? 'Drop a PDF here' : 'Loading your shelf…'}</span>
                         <span className="drop-hint-sub">{isPhone ? 'or tap + to choose files' : 'or click to choose files'}</span>

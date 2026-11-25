@@ -22,20 +22,42 @@ export function requestSync(delay = 400) {
 function setSession(s: AuthSession | null) {
   const next = s ? { userId: s.user.id, email: s.user.email ?? '' } : null;
   const cur = getState().session;
-  if (cur?.userId !== next?.userId) patchState({ session: next });
+  if (cur?.userId !== next?.userId || cur?.email !== next?.email) patchState({ session: next });
+}
+
+/**
+ * Every device gets its own anonymous account automatically (no email, no password),
+ * so books added on any device are shared with everyone straight away.
+ * Signing in with email is optional (it lets you manage your books from several devices).
+ */
+async function ensureDeviceAccount() {
+  if (!cloud || !navigator.onLine) return;
+  const { data } = await cloud.auth.getSession();
+  if (data.session) { setSession(data.session); return; }
+  const { data: anon, error } = await cloud.auth.signInAnonymously();
+  if (error) {
+    console.warn('Anonymous sign-in failed', error);
+    patchState({ syncProblem: /anonymous/i.test(error.message)
+      ? 'Automatic sharing is switched off in Supabase (Allow anonymous sign-ins).'
+      : 'Could not connect to the shared library.' });
+    return;
+  }
+  patchState({ syncProblem: null });
+  setSession(anon.session);
 }
 
 export function startSync() {
   if (!cloud) return;
-  void cloud.auth.getSession().then(({ data }) => setSession(data.session));
+  void ensureDeviceAccount().then(() => requestSync(50));
   // Never call Supabase inside this callback (it can deadlock); just schedule.
   cloud.auth.onAuthStateChange((event, s) => {
     setSession(s);
-    if (event === 'SIGNED_IN') toast(`Signed in as ${s?.user.email ?? 'you'}`);
+    if (event === 'SIGNED_IN' && s?.user.email) toast(`Signed in as ${s.user.email}`);
+    if (event === 'SIGNED_OUT') setTimeout(() => void ensureDeviceAccount(), 0);
     requestSync(100);
   });
+  window.addEventListener('online', () => { void ensureDeviceAccount(); requestSync(100); });
   onRemoteChange(() => requestSync(300));
-  window.addEventListener('online', () => requestSync(100));
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') requestSync(200); });
   requestSync(50);
 }
