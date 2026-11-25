@@ -1,7 +1,9 @@
 # Better Me
 
 Keep your PDFs on an animated bookshelf, open them like real books, and take short notes while reading.
-Installable PWA for PC and Android. No backend: everything lives in IndexedDB and works offline.
+Built by [Trillionaire Designs](https://trillionairedesigns.co.ke).
+
+Installable PWA for PC and Android. Works offline; every book added is shared with all devices through Supabase.
 
 ## Run it
 

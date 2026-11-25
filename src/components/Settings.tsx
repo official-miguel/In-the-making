@@ -5,6 +5,7 @@ import { downloadText } from '../lib/export';
 import { makeBackup, restoreBackup, toast, updateSettings, useStore, type Theme } from '../state/store';
 import { IconDownload, IconUpload, IconX } from './Icons';
 import { InstallSetting } from './Install';
+import { Credit } from './Credit';
 
 function Segmented<T extends string>({ label, value, options, onChange }: { label: string; value: T; options: [T, string][]; onChange: (v: T) => void }) {
   return (
@@ -67,6 +68,10 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
               try { toast(await restoreBackup(JSON.parse(await f.text()))); } catch (err) { toast((err as Error).message || 'That file could not be read'); }
             }} />
           </div>
+        </div>
+        <div className="setting about-row">
+          <span className="setting-hint">Better Me</span>
+          <Credit className="settings-credit" />
         </div>
       </div>
     </div>

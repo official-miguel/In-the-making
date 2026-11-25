@@ -7,11 +7,12 @@ export default defineConfig({
     react(),
     VitePWA({
       registerType: 'autoUpdate',
-      injectRegister: false, // registered from src/lib/pwa.ts      includeAssets: ['icon.svg', 'icons/*.png'],
+      injectRegister: false, // registered from src/lib/pwa.ts
+      includeAssets: ['icon.svg', 'icons/*.png'],
       manifest: {
         name: 'Better Me',
         short_name: 'Better Me',
-        description: 'Keep your PDFs on a beautiful bookshelf, read them like books and take notes.',
+        description: 'Keep your PDFs on a beautiful bookshelf, read them like books and take notes. Built by Trillionaire Designs.',
         theme_color: '#0F172A',
         background_color: '#0F172A',
         display: 'standalone',

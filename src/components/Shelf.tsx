@@ -7,6 +7,7 @@ import {
 import { BookSpine, PHONE_SPINE_SCALE, SpineFace, spineSize } from './BookSpine';
 import { BookCard } from './BookCard';
 import { InstallBanner, InstallButton } from './Install';
+import { Credit } from './Credit';
 import {
   IconArrange, IconArrowDown, IconArrowUp, IconCheck, IconLibrary, IconNote, IconPlus, IconSearch, IconSettings, IconTrash, IconX,
 } from './Icons';
@@ -516,6 +517,7 @@ export function Shelf({ isPhone, hiddenBookId, onOpen, onShowNotes, onShowSettin
             <IconPlus size={16} /> New row
           </button>
         </div>
+        <Credit className="shelf-credit" />
       </main>
 
       {isPhone && (
